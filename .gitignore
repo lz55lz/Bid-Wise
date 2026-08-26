@@ -1,0 +1,102 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+venv/
+backend/.venv/
+
+# Node and frontend builds
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+.vite/
+*.tsbuildinfo
+
+# Local tooling and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Runtime data and generated artifacts
+data/
+volumes/
+uploads/
+artifacts/
+backups/
+logs/
+*.dump
+deploy/operations/backups/
+deploy/.runtime/
+deploy/logs/
+*.log
+*.out.log
+*.err.log
+.token
+.llm_*
+tmp_*
+*_TEST_RESULT.txt
+*_TEST_REPORT.md
+# Deliverables may contain personal or customer-facing material.
+deliverables/
+/AGENTS.md
+
+# One-off scripts used only to produce local demonstration material.
+/scripts/build_demo_enterprise_dossiers.py
+/scripts/build_demo_telecom_pdf.py
+
+# Historical test output and browser captures.
+/backend/output/
+/backend/tmp/
+/backend/*.egg-info/
+/backend/smoke_report*.txt
+/frontend/.playwright-mcp/
+/frontend/agent-dropdown.png
+/frontend/agent-dropdown2.png
+/frontend/login.png
+/frontend/md
+
+# Root-level local QA captures and one-off test artifacts
+/.answer_utf8.txt
+/.playwright-mcp/
+/add_material_dialog.yml
+/dashboard.yml
+/login_page.yml
+/materials_page.yml
+/agent-dropdown.png
+/chat-kb-dropdown.png
+/download-click.png
+/knowledge_page.png
+/knowledge_qa_result.png
+/knowledge_result2.png
+/project-detail-report.png
+/report-list.png
+/report_check.docx
+/report_check.pdf
+/report_v2.md
+/report_v2_gbk.md
+/report_v3.md
+/test_report.md
+/test_v10.docx
+/zbtest.pdf
+/check_doc.py
+/check_nodes.py
+/build_agent_resume.py
+/tmp_extract_resume.py
+/tmp_resume_text.txt
+/test_all_docs.py
+/test_rag_flow.py

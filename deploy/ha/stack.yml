@@ -1,0 +1,161 @@
+# Production HA topology. Deploy with `docker stack deploy`, not the local
+# Docker Desktop Compose command. PostgreSQL, Redis, MinIO, Milvus and MinerU
+# are externally managed HA dependencies and are intentionally not recreated.
+services:
+  gateway:
+    image: nginx:1.27-alpine
+    ports:
+      - target: 443
+        published: 443
+        protocol: tcp
+        mode: ingress
+    configs:
+      - source: ai_bid_advisor_gateway_conf
+        target: /etc/nginx/conf.d/default.conf
+        mode: 0444
+    secrets:
+      - source: ai_bid_advisor_tls_crt
+        target: tls.crt
+      - source: ai_bid_advisor_tls_key
+        target: tls.key
+    networks: [app]
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        delay: 5s
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+
+  frontend:
+    image: ${AI_BID_ADVISOR_FRONTEND_IMAGE:?set an immutable frontend image reference}
+    networks: [app]
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+
+  api:
+    image: ${AI_BID_ADVISOR_API_IMAGE:?set an immutable API image reference}
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?provide the externally managed PostgreSQL URL}
+      REDIS_URL: ${REDIS_URL:?provide the externally managed Redis URL}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?provide a deployment secret}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:?provide the HA MinIO endpoint}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?provide through the deployment environment}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?provide through the deployment environment}
+      MINIO_BUCKET: ${MINIO_BUCKET:-ai-bid-advisor}
+      CLAMAV_HOST: ${CLAMAV_HOST:?provide the HA ClamAV service endpoint}
+      CLAMAV_PORT: ${CLAMAV_PORT:-3310}
+      MINERU_BASE_URL: ${MINERU_BASE_URL:?provide the managed MinerU endpoint}
+      MINERU_API_KEY: ${MINERU_API_KEY:-}
+      MILVUS_URI: ${MILVUS_URI:?provide the HA Milvus endpoint}
+      ERP_INTEGRATION_BASE_URL: ${ERP_INTEGRATION_BASE_URL:-}
+      ERP_INTEGRATION_API_KEY: ${ERP_INTEGRATION_API_KEY:-}
+      CRM_INTEGRATION_BASE_URL: ${CRM_INTEGRATION_BASE_URL:-}
+      CRM_INTEGRATION_API_KEY: ${CRM_INTEGRATION_API_KEY:-}
+      PUBLIC_RESOURCE_INTEGRATION_BASE_URL: ${PUBLIC_RESOURCE_INTEGRATION_BASE_URL:-}
+      PUBLIC_RESOURCE_INTEGRATION_API_KEY: ${PUBLIC_RESOURCE_INTEGRATION_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      RERANKER_BASE_URL: ${RERANKER_BASE_URL:-}
+      RERANKER_API_KEY: ${RERANKER_API_KEY:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+    networks: [app]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+    deploy:
+      replicas: 3
+      update_config:
+        parallelism: 1
+        delay: 15s
+        order: start-first
+        monitor: 45s
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+
+  worker:
+    image: ${AI_BID_ADVISOR_API_IMAGE:?set an immutable API image reference}
+    command: python start_worker.py
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?provide the externally managed PostgreSQL URL}
+      REDIS_URL: ${REDIS_URL:?provide the externally managed Redis URL}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?provide a deployment secret}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:?provide the HA MinIO endpoint}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?provide through the deployment environment}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?provide through the deployment environment}
+      MINIO_BUCKET: ${MINIO_BUCKET:-ai-bid-advisor}
+      CLAMAV_HOST: ${CLAMAV_HOST:?provide the HA ClamAV service endpoint}
+      CLAMAV_PORT: ${CLAMAV_PORT:-3310}
+      MINERU_BASE_URL: ${MINERU_BASE_URL:?provide the managed MinerU endpoint}
+      MINERU_API_KEY: ${MINERU_API_KEY:-}
+      MILVUS_URI: ${MILVUS_URI:?provide the HA Milvus endpoint}
+      ERP_INTEGRATION_BASE_URL: ${ERP_INTEGRATION_BASE_URL:-}
+      ERP_INTEGRATION_API_KEY: ${ERP_INTEGRATION_API_KEY:-}
+      CRM_INTEGRATION_BASE_URL: ${CRM_INTEGRATION_BASE_URL:-}
+      CRM_INTEGRATION_API_KEY: ${CRM_INTEGRATION_API_KEY:-}
+      PUBLIC_RESOURCE_INTEGRATION_BASE_URL: ${PUBLIC_RESOURCE_INTEGRATION_BASE_URL:-}
+      PUBLIC_RESOURCE_INTEGRATION_API_KEY: ${PUBLIC_RESOURCE_INTEGRATION_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      RERANKER_BASE_URL: ${RERANKER_BASE_URL:-}
+      RERANKER_API_KEY: ${RERANKER_API_KEY:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+    networks: [app]
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 15s
+        order: start-first
+        monitor: 45s
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+
+networks:
+  app:
+    driver: overlay
+    attachable: false
+
+configs:
+  ai_bid_advisor_gateway_conf:
+    file: ./nginx.conf
+
+secrets:
+  ai_bid_advisor_tls_crt:
+    external: true
+  ai_bid_advisor_tls_key:
+    external: true

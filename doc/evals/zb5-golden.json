@@ -1,0 +1,26 @@
+{
+  "schema_version": 2,
+  "source": {
+    "file_name": "zb5.pdf",
+    "sha256": "52ec6f955503bef0cb29586555ad4e7bccb8ad37ec831f88a26d0b0fc5ec33f4"
+  },
+  "purpose": "人工维护的关键条款黄金集。每项基于 MinerU 原文页人工标注，且不从模型候选反向生成。",
+  "requirements": [
+    {"id": "joint-bid-agreement", "page": 24, "category": "QUALIFICATION", "mandatory": true, "term_groups": [["联合体"], ["协议书", "牵头人"]]},
+    {"id": "related-party-restriction", "page": 24, "category": "QUALIFICATION", "mandatory": true, "term_groups": [["关联关系"], ["投标人"]]},
+    {"id": "credit-restriction", "page": 24, "category": "QUALIFICATION", "mandatory": true, "term_groups": [["不良信用"], ["失信", "黑名单"]]},
+    {"id": "business-license", "page": 43, "category": "QUALIFICATION", "term_groups": [["营业执照"], ["监理资质"]]},
+    {"id": "bid-price-uniqueness", "page": 43, "category": "QUALIFICATION", "mandatory": true, "term_groups": [["投标报价"], ["两个以上", "唯一"]]},
+    {"id": "invoice-delivery", "page": 58, "category": "BUSINESS", "mandatory": true, "term_groups": [["发票"], ["15天", "5个工作日"]]},
+    {"id": "service-payment", "page": 58, "category": "BUSINESS", "term_groups": [["监理服务费"], ["95%"]]},
+    {"id": "suspension-termination", "page": 63, "category": "BUSINESS", "term_groups": [["暂停"], ["180天"]]},
+    {"id": "financial-form", "page": 30, "category": "QUALIFICATION", "mandatory": true, "term_groups": [["资格审查资料"], ["财务状况"]]},
+    {"id": "performance-form", "page": 30, "category": "QUALIFICATION", "mandatory": true, "term_groups": [["资格审查资料"], ["类似项目"]]}
+  ],
+  "project_fields": [],
+  "thresholds": {
+    "requirement_recall": 0.9,
+    "mandatory_requirement_recall": 0.9,
+    "requirement_evidence_location_rate": 1.0
+  }
+}

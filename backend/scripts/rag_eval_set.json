@@ -1,0 +1,62 @@
+[
+  {
+    "scope": "knowledge",
+    "question": "评标委员会人数有什么要求",
+    "expect": ["成员人数应当为5人以上单数"]
+  },
+  {
+    "scope": "knowledge",
+    "question": "联合体投标怎么规定",
+    "expect": ["以一个投标人的身份共同投标"]
+  },
+  {
+    "scope": "knowledge",
+    "question": "什么情况下投标无效",
+    "expect": ["投标无效"]
+  },
+  {
+    "scope": "knowledge",
+    "question": "履约保证金上限是多少",
+    "expect": ["履约保证金不得超过中标合同金额的10%"]
+  },
+  {
+    "scope": "knowledge",
+    "question": "投标保证金可以用什么形式提交",
+    "expect": ["投标保证金"]
+  },
+  {
+    "scope": "knowledge",
+    "question": "招标文件澄清修改要在什么时候发出",
+    "expect": ["澄清或者修改"]
+  },
+  {
+    "scope": "project",
+    "question": "本项目对投标人资质有什么要求",
+    "expect": ["具备有效的营业执照"]
+  },
+  {
+    "scope": "project",
+    "question": "开标在哪里进行",
+    "expect": ["云南省公共资源交易中心"]
+  },
+  {
+    "scope": "project",
+    "question": "投标文件大小有什么限制",
+    "expect": ["小于200M"]
+  },
+  {
+    "scope": "project",
+    "question": "设计周期延长怎么处理",
+    "expect": ["设计周期"]
+  },
+  {
+    "scope": "project",
+    "question": "投标人在中华人民共和国境内注册需要什么条件",
+    "expect": ["中华人民共和国境内注册"]
+  },
+  {
+    "scope": "project",
+    "question": "开标网址是什么",
+    "expect": ["ggzy.yn.gov.cn"]
+  }
+]

@@ -1,0 +1,32 @@
+{
+  "schema_version": 2,
+  "source": {
+    "file_name": "zb12.pdf",
+    "sha256": "6cf63b9248a333db58103f0b95a4b3f8db280cb35ac8a77b102d7a2e72523a65"
+  },
+  "purpose": "人工维护的关键资格、提交、报价和评审条款黄金集。每项回查 MinerU 原文页后录入。",
+  "requirements": [
+    {"id": "basic-eligibility", "page": 8, "category": "QUALIFICATION", "term_groups": [["营业执照"], ["施工企业资质", "安全生产许可证"]]},
+    {"id": "project-manager", "page": 8, "category": "QUALIFICATION", "mandatory": true, "term_groups": [["项目经理"], ["注册建造师", "机电工程"]]},
+    {"id": "financial-statement", "page": 8, "category": "QUALIFICATION", "mandatory": true, "term_groups": [["财务"], ["2023", "2024", "2025"]]},
+    {"id": "credit-restriction", "page": 8, "category": "QUALIFICATION", "mandatory": true, "term_groups": [["失信被执行人"], ["黑名单", "信用中国"]]},
+    {"id": "electronic-submission", "page": 17, "category": "BUSINESS", "mandatory": true, "term_groups": [["电子投标文件"], ["电子签名", "截止时间"]]},
+    {"id": "joint-bid-exclusivity", "page": 21, "category": "BUSINESS", "mandatory": true, "term_groups": [["联合体各方"], ["不得", "单独"]]},
+    {"id": "price-cap", "page": 25, "category": "BUSINESS", "mandatory": true, "term_groups": [["最高投标限价"], ["不得超过"]]},
+    {"id": "low-price-clarification", "page": 56, "category": "SCORING", "mandatory": true, "term_groups": [["低于"], ["成本价", "证明材料"]]},
+    {"id": "clarification-boundary", "page": 57, "category": "BUSINESS", "mandatory": true, "term_groups": [["澄清"], ["实质性内容"]]},
+    {"id": "alternative-bid-ban", "page": 27, "category": "BUSINESS", "mandatory": true, "term_groups": [["备选投标方案"], ["不得"]]}
+  ],
+  "project_fields": [
+    {"id": "tenderer", "page": 1, "field_code": "tenderer", "term_groups": [["中国铁路"], ["昆明局"]]},
+    {"id": "contact-person", "page": 10, "field_code": "contact_person", "terms": ["吴超贤"]},
+    {"id": "contact-phone", "page": 10, "field_code": "contact_phone", "terms": ["0871-66121636"]}
+  ],
+  "thresholds": {
+    "requirement_recall": 0.8,
+    "mandatory_requirement_recall": 0.85,
+    "requirement_evidence_location_rate": 1.0,
+    "project_field_recall": 1.0,
+    "project_field_evidence_location_rate": 1.0
+  }
+}
