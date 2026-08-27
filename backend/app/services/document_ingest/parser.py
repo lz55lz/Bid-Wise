@@ -95,6 +95,7 @@ def parse_document(
             chunk["chunk_index"] = index
             chunk["chunk_id"] = f"{doc_id}_{index}"
         if page_chunks:
+            page_chunks = semantic_chunk_layout_nodes(page_chunks)
             logger.info(
                 "[document_ingest] LocalPdfParser parsed %d page-aware chunks",
                 len(page_chunks),
@@ -105,6 +106,7 @@ def parse_document(
 
     if raw_text:
         raw_text_out, chunks = raw_text_to_chunks(raw_text, doc_id)
+        chunks = semantic_chunk_layout_nodes(chunks)
         if chunks:
             logger.info(f"[document_ingest] LocalPdfParser parsed {len(chunks)} chunks")
             return chunks, raw_text_out
@@ -121,6 +123,7 @@ def parse_document(
 
     if raw_text:
         raw_text_out, chunks = raw_text_to_chunks(raw_text, doc_id)
+        chunks = semantic_chunk_layout_nodes(chunks)
         if chunks:
             logger.info(f"[document_ingest] MarkItdown parsed {len(chunks)} chunks")
             return chunks, raw_text_out

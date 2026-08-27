@@ -396,6 +396,67 @@ export const knowledgeApi = {
   },
 }
 
+export interface EvaluationCaseInput {
+  question: string
+  scope: 'knowledge' | 'project'
+  expected_evidence: string[]
+}
+
+export interface EvaluationSet {
+  id: string
+  name: string
+  description: string | null
+  enabled: boolean
+  version: number
+  cases: Array<EvaluationCaseInput & { id: string }>
+}
+
+export interface EvaluationSetPayload {
+  name: string
+  description?: string | null
+  cases: EvaluationCaseInput[]
+}
+
+export interface EvaluationRunResult {
+  total: number
+  passed: number
+  skipped: number
+  recall_at_5: number
+  elapsed_ms: number
+  results: Array<{
+    question: string
+    scope: string
+    passed: boolean | null
+    skipped?: boolean
+    rank?: number
+    error?: string
+    expected?: string[]
+    matched_excerpt?: string
+  }>
+}
+
+export const evaluationApi = {
+  listSets: () =>
+    request.get<EvaluationSet[]>('/evaluations/sets') as unknown as Promise<EvaluationSet[]>,
+
+  createSet: (data: EvaluationSetPayload) =>
+    request.post<EvaluationSet>('/evaluations/sets', data) as unknown as Promise<EvaluationSet>,
+
+  updateSet: (id: string, data: EvaluationSetPayload) =>
+    request.put<EvaluationSet>(`/evaluations/sets/${id}`, data) as unknown as Promise<EvaluationSet>,
+
+  setEnabled: (id: string, enabled: boolean) =>
+    request.patch<EvaluationSet>(`/evaluations/sets/${id}/enabled`, null, { params: { enabled } }) as unknown as Promise<EvaluationSet>,
+
+  deleteSet: (id: string) =>
+    request.delete(`/evaluations/sets/${id}`) as unknown as Promise<void>,
+
+  runRag: (projectId?: string, setId?: string) =>
+    request.post<EvaluationRunResult>('/evaluations/rag', null, {
+      params: { ...(projectId ? { project_id: projectId } : {}), ...(setId ? { set_id: setId } : {}) },
+    }) as unknown as Promise<EvaluationRunResult>,
+}
+
 // Agent Run（投标分析）
 // 注意：除 create/list 外，后端详情与操作路由均不带 project_id 前缀
 export const agentApi = {

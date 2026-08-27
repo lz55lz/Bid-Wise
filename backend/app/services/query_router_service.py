@@ -192,7 +192,12 @@ class QueryRouterService:
     def __init__(self, settings: Settings):
         self._settings = settings
 
-    def route(self, question: str, context: RouteContext | None = None) -> RouteDecision:
+    def route(
+        self,
+        question: str,
+        context: RouteContext | None = None,
+        conversation_context: str | None = None,
+    ) -> RouteDecision:
         """Route a user question to a knowledge source.
 
         Tries fast keyword matching first; falls back to LLM-based routing
@@ -219,7 +224,7 @@ class QueryRouterService:
             )
 
         # 2) Slow path: LLM-based routing with existence context
-        return self._llm_route(question, context)
+        return self._llm_route(conversation_context or question, context)
 
     def _llm_route(self, question: str, context: RouteContext | None = None) -> RouteDecision:
         """Use an LLM to classify the question when keywords are insufficient."""

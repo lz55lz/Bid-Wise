@@ -45,6 +45,7 @@ from app.db.models.documents import (
     TaskEvent,
     TenderClause,
 )
+from app.db.models.evaluation import EvaluationCase, EvaluationSet
 from app.db.models.identity import (
     AuditLog,
     Enterprise,
@@ -115,6 +116,8 @@ __all__ = [
     "DocumentNode",
     "DocumentVersion",
     "Evidence",
+    "EvaluationCase",
+    "EvaluationSet",
     "EnterpriseMaterial",
     "GraphEdge",
     "GraphNode",

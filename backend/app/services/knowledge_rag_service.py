@@ -674,6 +674,8 @@ class KnowledgeRagService:
         return vectors[0]
 
     def _rank(self, question: str, contexts: list[_Context]) -> list[_Context]:
+        if not contexts:
+            return []
         rewrite_result = rewrite_query(question)
         rerank_query = rewrite_result.rerank_query
         logger.info("[RAG] rerank: ctx=%d q=%s", len(contexts), rerank_query[:50])
@@ -735,6 +737,8 @@ class KnowledgeRagService:
         rewrite_result: QueryRewriteResult | None = None,
     ) -> list[_Context]:
         """Async version of _rank."""
+        if not contexts:
+            return []
         from app.integrations.ai.reranker import AsyncRankerClient
 
         if rewrite_result is None:

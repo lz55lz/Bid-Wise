@@ -9,6 +9,7 @@ from app.api.v1 import (
     decisions,
     documents,
     enterprises,
+    evaluation,
     evidences,
     im,
     im_channel,
@@ -28,6 +29,7 @@ api_router.include_router(advanced.router)
 api_router.include_router(analysis.router)
 api_router.include_router(projects.router)
 api_router.include_router(documents.router)
+api_router.include_router(evaluation.router)
 api_router.include_router(enterprises.router)
 api_router.include_router(evidences.router)
 api_router.include_router(requirements.router)

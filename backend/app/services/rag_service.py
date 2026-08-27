@@ -703,6 +703,8 @@ class RagService:
     def _call_reranker_sync(
         self, question: str, contexts: list[_Context], rewrite_result
     ) -> list[float]:
+        if not contexts:
+            return []
         run, rerank_query = self._start_rerank_run(question, contexts, rewrite_result)
         cleaned = [_clean_passage_for_rerank(c.chunk.content) for c in contexts]
         valid_contents = [c for c in cleaned if c.strip()]
@@ -727,6 +729,8 @@ class RagService:
     async def _call_reranker_async(
         self, question: str, contexts: list[_Context], rewrite_result
     ) -> list[float]:
+        if not contexts:
+            return []
         run, rerank_query = self._start_rerank_run(question, contexts, rewrite_result)
         cleaned = [_clean_passage_for_rerank(c.chunk.content) for c in contexts]
         valid_contents = [c for c in cleaned if c.strip()]

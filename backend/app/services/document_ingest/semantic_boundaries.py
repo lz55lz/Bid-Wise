@@ -36,7 +36,25 @@ _PAGE_ARTIFACT = re.compile(
     re.IGNORECASE,
 )
 _TERMINAL = re.compile(r"[。！？；：;:]\s*$")
-_CONTINUATION_PREFIX = re.compile(r"^(?:[，、；;。！？）)】]|(?:以内|以上|以下|以及|或者|并且|且|并|但|而|的|了|内|外))")
+_CONTINUATION_PREFIX = re.compile(
+    r"^(?:[，、；;。！？）)】]|(?:以内|以上|以下|以及|或者|并且|且|并|但|而|的|了|内|外))"
+)
+_CONTENTS_HEADING = re.compile(r"^目\s*录$")
+_CONTENTS_ENTRY = re.compile(
+    r"^第(?P<ordinal>[一二三四五六七八九十百千\d]+)[编章节](?:\s+|$)"
+)
+_CHINESE_ORDINALS = {
+    "一": 1,
+    "二": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+}
 
 # This is deliberately not a target chunk size.  It only distinguishes a
 # parser residue from an independently readable clause/list row.
@@ -54,6 +72,17 @@ def _compact_len(content: str) -> int:
 
 def _normalise_text(content: object) -> str:
     return re.sub(r"\s+", " ", str(content or "")).strip()
+
+
+def _contents_ordinal(content: str) -> int | None:
+    """Return an ordinal for a one-line contents entry when it is unambiguous."""
+    match = _CONTENTS_ENTRY.match(content)
+    if match is None:
+        return None
+    value = match.group("ordinal")
+    if value.isdecimal():
+        return int(value)
+    return _CHINESE_ORDINALS.get(value)
 
 
 def _is_noise(content: str) -> bool:
@@ -95,8 +124,27 @@ def semantic_chunk_layout_nodes(chunks: Iterable[dict[str, Any]]) -> list[dict[s
     tables with prose, and records the source block indexes for audit.
     """
     prepared: list[dict[str, Any]] = []
+    in_contents = False
+    last_contents_ordinal: int | None = None
     for source in chunks:
         text = _normalise_text(source.get("chunk_text"))
+        # MinerU commonly emits the contents title and each entry as separate
+        # layout nodes.  A title-only quality gate therefore removes only
+        # "目录", leaving every chapter heading in the knowledge body.  While
+        # inside a contents block, drop its monotonic heading sequence.  The
+        # sequence resets when the real body starts from chapter/section one.
+        if _CONTENTS_HEADING.fullmatch(text):
+            in_contents = True
+            last_contents_ordinal = None
+            continue
+        contents_ordinal = _contents_ordinal(text)
+        if in_contents and contents_ordinal is not None:
+            if last_contents_ordinal is None or contents_ordinal > last_contents_ordinal:
+                last_contents_ordinal = contents_ordinal
+                continue
+            in_contents = False
+        elif in_contents:
+            in_contents = False
         if _is_noise(text):
             continue
         item = {**source, "chunk_text": text}
@@ -115,8 +163,10 @@ def semantic_chunk_layout_nodes(chunks: Iterable[dict[str, Any]]) -> list[dict[s
             previous["parser_metadata"] = previous_metadata
             continue
         # A one-to-six character item which cannot complete a preceding clause
-        # is parser noise, not evidence suitable for either RAG path.
-        if _compact_len(text) < 7:
+        # is parser noise, except for an explicit chapter/section/article
+        # heading.  The contents-state handling above has already discarded
+        # headings inside a real contents block.
+        if _compact_len(text) < 7 and not is_explicit_clause_start(text):
             continue
         prepared.append(item)
 
@@ -134,7 +184,7 @@ def semantic_chunk_layout_nodes(chunks: Iterable[dict[str, Any]]) -> list[dict[s
             # A split may expose a source residue such as "注：" that was
             # hidden inside a longer layout block.  It is not a clause, list
             # item or table row and must not survive as standalone evidence.
-            if _compact_len(part) < 7:
+            if _compact_len(part) < 7 and not is_explicit_clause_start(part):
                 continue
             item = {**source, "chunk_text": part}
             metadata = dict(item.get("parser_metadata") or {})

@@ -61,6 +61,11 @@
           <template #title>智能问答</template>
         </el-menu-item>
 
+        <el-menu-item index="/evaluation" @click="router.push('/evaluation')">
+          <el-icon><DataAnalysis /></el-icon>
+          <template #title>评测中心</template>
+        </el-menu-item>
+
         <el-divider />
 
         <el-menu-item index="/settings" @click="router.push('/settings')">
@@ -139,6 +144,7 @@ const activeMenu = computed(() => {
   if (route.path.startsWith('/risks')) return '/risks'
   if (route.path.startsWith('/reports')) return '/reports'
   if (route.path === '/chat') return '/chat'
+  if (route.path.startsWith('/evaluation')) return '/evaluation'
   if (route.path.startsWith('/knowledge/chat')) return '/knowledge/chat'
   if (route.path.startsWith('/knowledge')) return '/knowledge'
   if (route.path.startsWith('/settings')) return '/settings'

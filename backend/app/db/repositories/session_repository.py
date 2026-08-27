@@ -109,3 +109,17 @@ class MessageRepository:
             .offset(offset)
         )
         return list(self._session.execute(q).scalars().all())
+
+    def list_recent_session_messages(self, session_id: str, limit: int = 6) -> list[Message]:
+        """Return the newest completed messages in chronological order.
+
+        Conversation context is deliberately bounded.  The session remains a
+        history container, never an authorization credential.
+        """
+        q = (
+            select(Message)
+            .where(Message.session_id == session_id, Message.is_completed.is_(True))
+            .order_by(Message.created_at.desc())
+            .limit(limit)
+        )
+        return list(reversed(list(self._session.execute(q).scalars().all())))

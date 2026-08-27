@@ -265,3 +265,36 @@ def test_graph_parse_document_shim_returns_tuple():
     assert isinstance(raw_text, str)
     assert chunks == []
     assert raw_text == ""
+
+
+def test_semantic_chunking_removes_contents_entries_but_keeps_real_first_chapter() -> None:
+    chunks = semantic_chunk_layout_nodes(
+        [
+            {"chunk_index": 0, "page_no": 1, "chunk_type": "section", "chunk_text": "目录"},
+            {"chunk_index": 1, "page_no": 1, "chunk_type": "section", "chunk_text": "第一章 总则"},
+            {
+                "chunk_index": 2,
+                "page_no": 1,
+                "chunk_type": "section",
+                "chunk_text": "第二章 政府采购当事人",
+            },
+            {
+                "chunk_index": 3,
+                "page_no": 1,
+                "chunk_type": "section",
+                "chunk_text": "第三章 政府采购方式",
+            },
+            {"chunk_index": 4, "page_no": 2, "chunk_type": "section", "chunk_text": "第一章 总则"},
+            {
+                "chunk_index": 5,
+                "page_no": 2,
+                "chunk_type": "paragraph",
+                "chunk_text": "第一条 为了规范政府采购行为，制定本法。",
+            },
+        ]
+    )
+
+    assert [chunk["chunk_text"] for chunk in chunks] == [
+        "第一章 总则",
+        "第一条 为了规范政府采购行为，制定本法。",
+    ]

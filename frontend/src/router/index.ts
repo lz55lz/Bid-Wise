@@ -72,6 +72,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '智能问答' },
       },
       {
+        path: 'evaluation',
+        name: 'EvaluationCenter',
+        component: () => import('@/views/evaluation/EvaluationCenter.vue'),
+        meta: { title: '评测中心' },
+      },
+      {
         path: 'settings',
         name: 'Settings',
         component: () => import('@/views/settings/Settings.vue'),
