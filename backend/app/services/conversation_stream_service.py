@@ -168,11 +168,11 @@ class ConversationStreamService:
             {"type": "status", "stage": "retrieval", "message": "正在检索可引用的原文证据…"}
         )
         routed_question = decision.question or question
-        effective_question = (
-            contextual_question
-            if routed_question in {question, contextual_question}
-            else self._with_recent_history(chat_session, routed_question)
-        )
+        # Conversation history is untrusted context for routing/reference
+        # resolution only. Passing an entire assistant reply to embedding and
+        # reranking makes every follow-up query grow until an integration
+        # rejects it, and also dilutes retrieval relevance.
+        effective_question = routed_question
         async for event in self._stream_rag(
             chat_session=chat_session,
             original_question=turn.question,
@@ -239,9 +239,12 @@ class ConversationStreamService:
     def _resolve_turn_context(
         self, turn: ConversationStreamTurn, chat_session: ChatSession
     ) -> tuple[str, UUID | None, bool]:
-        project_id = (
-            UUID(chat_session.active_project_id) if chat_session.active_project_id else None
-        )
+        # Sessions created through the CRUD API may only have ``project_id``.
+        # Treat it as the current context until a later turn explicitly changes
+        # the active project, otherwise a valid project session is asked to
+        # select a project again.
+        stored_project_id = chat_session.active_project_id or chat_session.project_id
+        project_id = UUID(stored_project_id) if stored_project_id else None
         pending = chat_session.pending_intent or {}
         if pending.get("type") != "await_project_selection":
             return turn.question, project_id, False
@@ -299,7 +302,11 @@ class ConversationStreamService:
             .first()
             is not None
         )
-        return RouteContext(has_report=has_report, has_tender_docs=has_tender_docs)
+        return RouteContext(
+            has_project_context=True,
+            has_report=has_report,
+            has_tender_docs=has_tender_docs,
+        )
 
     def _with_recent_history(self, chat_session: ChatSession, question: str) -> str:
         """Add a small, bounded history window for intent and reference resolution.
@@ -394,7 +401,14 @@ class ConversationStreamService:
                         citations = list(payload.get("citations") or [])
                         is_fallback = bool(payload.get("no_evidence"))
                     elif payload.get("type") == "error":
-                        answer = _FAILURE_REPLY
+                        answer = self._retrieval_fallback(contexts)
+                        citations = [
+                            {
+                                "evidence_id": str(item["evidence_id"]),
+                                "content": str(item["content"])[:200],
+                            }
+                            for item in contexts
+                        ]
                         is_fallback = True
                         yield event
                         continue
@@ -470,6 +484,16 @@ class ConversationStreamService:
                         lines.append(f"- **{item.priority}**：{item.action}")
                         citation_ids.extend(item.evidence_ids)
         return "\n".join(lines), self._citations(citation_ids)
+
+    @staticmethod
+    def _retrieval_fallback(contexts: list[dict[str, Any]]) -> str:
+        """Keep an evidence-backed answer available when generation fails."""
+        lines = ["问答生成服务暂时不可用，以下是已检索到的项目原文摘录："]
+        for item in contexts[:3]:
+            excerpt = " ".join(str(item.get("content") or "").split())[:300]
+            if excerpt:
+                lines.append(f"- {excerpt}")
+        return "\n\n".join(lines)
 
     async def _finish_direct(
         self,

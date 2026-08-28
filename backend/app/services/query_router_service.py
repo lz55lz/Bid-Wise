@@ -37,6 +37,7 @@ class QuerySource(StrEnum):
 class RouteContext(BaseModel):
     """项目数据存在性上下文（由调用方查库填充），供路由做存在性感知。"""
 
+    has_project_context: bool = False
     has_report: bool = False
     has_tender_docs: bool = False
 
@@ -129,6 +130,16 @@ _SMALL_TALK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Short follow-ups such as “要求呢？” depend on the selected project and are
+# common in multi-turn use.  Do not spend a model call asking the user to
+# restate a project that is already in the trusted route context.
+_PROJECT_TENDER_FOLLOWUP_RE = re.compile(
+    r"^(?:那|这(?:个)?|本|该|上述)?(?:项目)?(?:有(?:哪些|什么)|哪些|什么)?(?:投标)?(?:要求|资格|资质|材料|条款|评分(?:办法)?|保函|保证金|截止时间)(?:呢|吗|怎么样|有哪些|是什么)?[？?！!。]*$"
+)
+_IMPLICIT_FOLLOWUP_RE = re.compile(
+    r"^(?:那|这|这个|本|上述)?(?:个|项|条|部分|材料)?(?:呢|吗|么|呀|啊|为什么|为何|怎么|如何|具体|详细|第一项|第二项|第三项)[？?！!。]*$"
+)
+
 
 def _keyword_route(question: str) -> tuple[QuerySource, str | None]:
     """Fast keyword-based routing without LLM invocation."""
@@ -151,11 +162,14 @@ _ROUTE_SYSTEM_PROMPT = """\
 - unclear：问题歧义，无法 confidently 分类
 
 项目上下文：
+- 当前会话已选定项目：{has_project_context}
 - 该项目已生成投标分析报告：{has_report}
 - 该项目已导入招标文件：{has_tender_docs}
 
 分类规则：
 - 问"某事怎么规定/是否合法/依据什么法"→ legal；问"本项目/这个项目的文件里写了什么"→ tender
+- 当前会话已选定项目时，未指明主语的短问句（如"有什么要求？"）默认指该项目，
+  不得追问是哪个项目
 - report 仅用于分析结论类问题；若项目没有分析报告，不要路由到 report（改选 tender 或 unclear）
 - 路由为 report 时设置 report_target：
   - "decision"：该不该投、结论、评分、建议
@@ -178,6 +192,7 @@ Respond strictly as JSON:
 def _build_route_system_prompt(context: RouteContext | None) -> str:
     ctx = context or RouteContext()
     return _ROUTE_SYSTEM_PROMPT.format(
+        has_project_context="是" if ctx.has_project_context else "否",
         has_report="是" if ctx.has_report else "否",
         has_tender_docs="是" if ctx.has_tender_docs else "否",
     )
@@ -213,6 +228,9 @@ class QueryRouterService:
         # 闲聊不调用模型、不占用检索资源，也不会要求先选择项目。
         if _SMALL_TALK_RE.match(question):
             return RouteDecision(source=QuerySource.SMALL_TALK, question=question)
+
+        if context and context.has_project_context and _PROJECT_TENDER_FOLLOWUP_RE.match(question):
+            return RouteDecision(source=QuerySource.TENDER, question=question)
 
         # 1) Fast path: strong-signal keyword matching
         source, report_target = _keyword_route(question)

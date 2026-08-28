@@ -44,16 +44,22 @@ def _is_retryable_rerank_error(exc: Exception) -> bool:
         return True
     if isinstance(exc, httpx.HTTPStatusError):
         return 500 <= exc.response.status_code < 600
+    # Some OpenAI-compatible rerankers intermittently return an incomplete
+    # JSON body while their health endpoint remains green.  The same request
+    # is safe to retry; validation still fails closed after the retry budget.
+    if isinstance(exc, (TypeError, ValueError, KeyError)):
+        return True
     return False
 
 
-# Retry config for reranker
-_RERANKER_RETRY = AsyncRetrying(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception(_is_retryable_rerank_error),
-    before_sleep=before_sleep_log(logger, logging.WARNING, exc_info=True),
-)
+def _new_reranker_retry() -> AsyncRetrying:
+    """Create a retry controller per request; AsyncRetrying is stateful."""
+    return AsyncRetrying(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception(_is_retryable_rerank_error),
+        before_sleep=before_sleep_log(logger, logging.WARNING, exc_info=True),
+    )
 
 
 class BgeRerankerV2M3Client:
@@ -163,7 +169,7 @@ class AsyncBgeRerankerV2M3Client:
             return [scores_by_index[index] for index in range(len(documents))]
 
         try:
-            async for attempt in _RERANKER_RETRY:
+            async for attempt in _new_reranker_retry():
                 with attempt:
                     return await _do_rerank()
         except Exception as exc:

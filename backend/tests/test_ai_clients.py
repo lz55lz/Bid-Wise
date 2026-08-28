@@ -1,8 +1,9 @@
+import asyncio
 from types import SimpleNamespace
 
 from app.core.config import Settings
 from app.integrations.ai.embedding import BgeM3Client
-from app.integrations.ai.reranker import BgeRerankerV2M3Client
+from app.integrations.ai.reranker import AsyncBgeRerankerV2M3Client, BgeRerankerV2M3Client
 
 
 def test_embedding_client_supports_an_unauthenticated_local_service(monkeypatch) -> None:
@@ -56,6 +57,30 @@ def test_reranker_client_supports_an_unauthenticated_local_service(monkeypatch) 
         "query": "question",
         "documents": ["first", "second"],
     }
+
+
+def test_async_reranker_retries_an_incomplete_response(monkeypatch) -> None:
+    calls = 0
+
+    async def fake_post(url: str, **kwargs):
+        nonlocal calls
+        calls += 1
+        payload = (
+            {"results": []}
+            if calls == 1
+            else {"results": [{"index": 0, "relevance_score": 0.8}]}
+        )
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: payload)
+
+    client = AsyncBgeRerankerV2M3Client(
+        Settings(reranker_base_url="http://reranker.example.invalid", reranker_api_key=None)
+    )
+    client._client = SimpleNamespace(post=fake_post)
+
+    scores = asyncio.run(client.rerank("question", ["first"]))
+
+    assert scores == [0.8]
+    assert calls == 2
 
 
 def test_settings_reuses_existing_chat_llm_configuration() -> None:

@@ -7,6 +7,7 @@
   避免双倍延迟以及 function_calling 失败导致整段无输出的问题
 """
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -17,6 +18,7 @@ from app.integrations.ai.llm import RagLlm
 logger = logging.getLogger(__name__)
 
 NO_EVIDENCE_ANSWER = "未找到证据"
+_STREAM_GENERATION_ATTEMPTS = 2
 
 
 def sse_event(data: dict[str, Any]) -> bytes:
@@ -49,21 +51,37 @@ async def stream_rag_answer(
 
     full_answer = ""
     chunk_count = 0
-    try:
-        logger.info("[RAG stream] LLM streaming start")
-        async for chunk in llm.astream_answer(question, contexts):
-            if not chunk:
+    for attempt in range(1, _STREAM_GENERATION_ATTEMPTS + 1):
+        try:
+            logger.info("[RAG stream] LLM streaming start attempt=%d", attempt)
+            async for chunk in llm.astream_answer(question, contexts):
+                if not chunk:
+                    continue
+                chunk_count += 1
+                full_answer += chunk
+                yield sse_event({"type": "delta", "content": chunk})
+            logger.info(
+                "[RAG stream] LLM streaming done: chunks=%d answer_len=%d",
+                chunk_count,
+                len(full_answer),
+            )
+            break
+        except Exception as exc:
+            if full_answer:
+                logger.warning(
+                    "[RAG stream] partial answer kept after %s: chunks=%d len=%d",
+                    type(exc).__name__,
+                    chunk_count,
+                    len(full_answer),
+                )
+                break
+            if attempt < _STREAM_GENERATION_ATTEMPTS:
+                logger.warning("[RAG stream] LLM stream failed before output; retrying: %s", exc)
+                await asyncio.sleep(0.5)
                 continue
-            chunk_count += 1
-            full_answer += chunk
-            yield sse_event({"type": "delta", "content": chunk})
-        logger.info("[RAG stream] LLM streaming done: chunks=%d answer_len=%d", chunk_count, len(full_answer))
-    except Exception as exc:
-        logger.error("[RAG stream] LLM stream error: %s: %s", type(exc).__name__, exc)
-        if not full_answer:
-            yield sse_event({"type": "error", "message": f"LLM 流式输出失败: {exc}"})
+            logger.error("[RAG stream] LLM stream error: %s: %s", type(exc).__name__, exc)
+            yield sse_event({"type": "error", "message": "问答生成暂时不可用，请稍后重试。"})
             return
-        logger.warning("[RAG stream] partial answer kept: chunks=%d len=%d", chunk_count, len(full_answer))
 
     answer = full_answer.strip()
     no_evidence = not answer or answer == NO_EVIDENCE_ANSWER
@@ -71,7 +89,12 @@ async def stream_rag_answer(
         {"evidence_id": str(c["evidence_id"]), "content": str(c["content"])[:200]}
         for c in contexts
     ]
-    logger.info("[RAG stream] done: answer=%r no_evidence=%s citations=%d", answer[:100], no_evidence, len(citations))
+    logger.info(
+        "[RAG stream] done: answer=%r no_evidence=%s citations=%d",
+        answer[:100],
+        no_evidence,
+        len(citations),
+    )
     yield sse_event({
         "type": "done",
         "answer": full_answer,

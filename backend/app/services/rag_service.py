@@ -871,6 +871,14 @@ class RagService:
         if not history_msg or not history_msg.knowledge_references:
             return current
 
+        references = history_msg.knowledge_references
+        # Assistant messages persist citations under a named envelope.  Older
+        # records may contain a bare list, so accept both representations.
+        if isinstance(references, dict):
+            references = references.get("citations", [])
+        if not isinstance(references, list):
+            return current
+
         current_ids = {str(ctx.chunk.id) for ctx in current}
         query_tokens = _tokenize_simple(question)
         if not query_tokens:
@@ -886,7 +894,9 @@ class RagService:
         role_codes = ref_ctx.evidence.role_codes
 
         injected: list[_Context] = []
-        for ref in history_msg.knowledge_references:
+        for ref in references:
+            if not isinstance(ref, dict):
+                continue
             if len(injected) >= _HISTORY_MAX_INJECT:
                 break
             ref_id = ref.get("chunk_id") or ref.get("id")
@@ -1096,7 +1106,7 @@ class RagService:
         while len(selected) < n:
             best_idx = -1
             best_score = float("-inf")
-            for i, candidate in enumerate(contexts):
+            for i, _candidate in enumerate(contexts):
                 if i in selected_indices:
                     continue
                 redundancy = 0.0
