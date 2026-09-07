@@ -1,5 +1,5 @@
 # Production HA topology. Deploy with `docker stack deploy`, not the local
-# Docker Desktop Compose command. PostgreSQL, Redis, MinIO, Milvus and MinerU
+# Docker Desktop Compose command. PostgreSQL, Redis, MinIO and MinerU
 # are externally managed HA dependencies and are intentionally not recreated.
 services:
   gateway:
@@ -62,7 +62,6 @@ services:
       CLAMAV_PORT: ${CLAMAV_PORT:-3310}
       MINERU_BASE_URL: ${MINERU_BASE_URL:?provide the managed MinerU endpoint}
       MINERU_API_KEY: ${MINERU_API_KEY:-}
-      MILVUS_URI: ${MILVUS_URI:?provide the HA Milvus endpoint}
       ERP_INTEGRATION_BASE_URL: ${ERP_INTEGRATION_BASE_URL:-}
       ERP_INTEGRATION_API_KEY: ${ERP_INTEGRATION_API_KEY:-}
       CRM_INTEGRATION_BASE_URL: ${CRM_INTEGRATION_BASE_URL:-}
@@ -114,7 +113,6 @@ services:
       CLAMAV_PORT: ${CLAMAV_PORT:-3310}
       MINERU_BASE_URL: ${MINERU_BASE_URL:?provide the managed MinerU endpoint}
       MINERU_API_KEY: ${MINERU_API_KEY:-}
-      MILVUS_URI: ${MILVUS_URI:?provide the HA Milvus endpoint}
       ERP_INTEGRATION_BASE_URL: ${ERP_INTEGRATION_BASE_URL:-}
       ERP_INTEGRATION_API_KEY: ${ERP_INTEGRATION_API_KEY:-}
       CRM_INTEGRATION_BASE_URL: ${CRM_INTEGRATION_BASE_URL:-}

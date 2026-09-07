@@ -18,12 +18,12 @@ BidWise 将招标文件解析、人工需求复核、企业材料匹配、风险
 - **企业匹配与风险研判**：以项目 ID 和企业 ID 关联数据，匹配企业材料并识别缺失项、风险等级与投标建议。
 - **企业适配度分析**：围绕绑定企业输出适配结论、优势、决定性缺口、风险与推进条件，而非只罗列招标要求。
 - **报告与项目问答**：报告汇总企业适配度、匹配、风险与决策；问答基于项目原文与企业材料返回答案和引用，支持连续追问与会话历史。
-- **运行可观测性**：系统设置提供后端依赖健康检查，展示 PostgreSQL、Redis、MinIO、Milvus、MinerU 与模型服务可用状态。
+- **运行可观测性**：系统设置提供后端依赖健康检查，展示 PostgreSQL、Redis、MinIO、MinerU 与模型服务可用状态。
 
 ## 技术亮点
 
 - 后端采用 FastAPI 模块化单体与独立 ARQ Worker，耗时解析、分析和报告任务不阻塞请求。
-- PostgreSQL 作为业务事实源；MinIO 保存文件对象，Milvus 保存可重建向量，Redis 承担队列、锁和短期状态。
+- PostgreSQL 作为业务事实源并通过 `pgvector` 保存向量；MinIO 保存文件对象，Redis 承担队列、锁和短期状态。
 - 所有项目、文档、证据和报告均由服务端按身份、角色、成员资格和资源归属进行授权校验。
 - 前端使用 Vue 3、TypeScript、Vite 与 Element Plus，覆盖项目管理、文档浏览、需求复核、报告和智能问答等完整演示路径。
 
@@ -54,7 +54,6 @@ Bid-Wise/
 ├── deploy/                  # 部署与运维脚本
 ├── doc/                     # 产品、架构、数据库与使用文档
 ├── .env.example             # 环境变量模板（不含真实值）
-└── docker-compose.yml       # 本地向量服务依赖
 ```
 
 ## 本地启动
@@ -117,4 +116,4 @@ npm run build
 - [本机部署与运行手册](doc/deployment-local.md)
 - [使用手册](doc/user-manual.md)
 
-PostgreSQL、Redis、MinIO、MinerU 及模型服务由部署环境提供；根目录 Compose 仅管理本地向量服务依赖。首次创建管理员可执行 `uv run python -m app.cli.bootstrap_admin`，该命令交互式读取密码，不会写入命令历史。
+PostgreSQL、Redis、MinIO、MinerU 及模型服务由部署环境提供。向量数据使用 PostgreSQL 的 `pgvector` 扩展，不需要部署独立向量数据库。首次创建管理员可执行 `uv run python -m app.cli.bootstrap_admin`，该命令交互式读取密码，不会写入命令历史。

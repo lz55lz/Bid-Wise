@@ -1,11 +1,11 @@
 # HA 部署与演练手册
 
-`stack.yml` 是生产 HA 覆盖配置，目标是 Docker Swarm：API 三副本、Worker 两副本、前端和网关各两副本。它不部署 PostgreSQL、Redis、MinIO、Milvus、MinerU 或 ClamAV；这些必须由部署方提供高可用端点。当前 Windows Docker Desktop 本地 Compose 环境是单节点验收环境，不应宣称具备 HA。
+`stack.yml` 是生产 HA 覆盖配置，目标是 Docker Swarm：API 三副本、Worker 两副本、前端和网关各两副本。它不部署 PostgreSQL、Redis、MinIO、MinerU 或 ClamAV；这些必须由部署方提供高可用端点。向量检索使用 PostgreSQL 的 `pgvector` 扩展，不依赖独立向量数据库。当前 Windows Docker Desktop 本地 Compose 环境是单节点验收环境，不应宣称具备 HA。
 
 ## 部署前置条件
 
 1. 至少三个可调度 Swarm 节点，镜像仓库提供带不可变 tag 或 digest 的 API 与前端镜像。
-2. PostgreSQL 已启用复制/故障转移；Redis 使用高可用队列端点；MinIO、Milvus、MinerU 和 ClamAV 具备服务级健康检查、容量和恢复方案。
+2. PostgreSQL（含 `pgvector` 扩展）已启用复制/故障转移；Redis 使用高可用队列端点；MinIO、MinerU 和 ClamAV 具备服务级健康检查、容量和恢复方案。
 3. 创建 TLS Swarm Secret `ai_bid_advisor_tls_crt` 与 `ai_bid_advisor_tls_key`。数据库、对象存储、JWT、AI 和连接器密钥只在受控部署环境注入，绝不写入此文件、Stack 或命令历史。
 4. 外部连接器实现 `POST /operations/lookup` 和/或 `POST /operations/export`；必须使用 `X-Integration-Run-ID` 做幂等去重。系统只会由用户显式发起调用，且不会自动重试有副作用的操作。
 
@@ -28,7 +28,7 @@ docker service ps ai-bid-advisor_api
 docker service ps ai-bid-advisor_worker
 ```
 
-4. 逐个确认新副本健康，再通过网关访问 `/health/ready`。健康检查会验证 PostgreSQL、Redis、MinIO、Milvus、MinerU 和 ClamAV；AI 端点未配置时 `ai_available: false` 是预期状态，不阻断非 AI 功能。
+4. 逐个确认新副本健康，再通过网关访问 `/health/ready`。健康检查会验证 PostgreSQL、Redis、MinIO、MinerU 和 ClamAV；AI 端点未配置时 `ai_available: false` 是预期状态，不阻断非 AI 功能。
 
 5. 如滚动发布监测期失败，Stack 会自动回滚。运维人员仍须检查服务事件、Worker 日志和审计日志，并记录故障处置结论。
 
@@ -41,8 +41,8 @@ docker service ps ai-bid-advisor_worker
 
 ## 季度演练
 
-1. 在隔离环境从最近一次受验证备份恢复 PostgreSQL 和 MinIO；按 `deploy/operations/README.md` 验证备份清单，再从 `search_chunks` 重建 Milvus。
+1. 在隔离环境从最近一次受验证备份恢复 PostgreSQL（含 pgvector 数据）和 MinIO，并按 `deploy/operations/README.md` 验证备份清单。
 2. 以单个 API、Worker 和网关副本失效为场景，验证剩余副本仍能登录、读取项目、下载授权文件和消费普通任务。
-3. 以 PostgreSQL、Redis、MinIO、Milvus、MinerU、ClamAV 分别不可用为场景，验证 `/health/ready` 明确降级，且不会把失败任务伪装为成功。
+3. 以 PostgreSQL、Redis、MinIO、MinerU、ClamAV 分别不可用为场景，验证 `/health/ready` 明确降级，且不会把失败任务伪装为成功。
 4. 对一个启用的测试连接器进行幂等对账演练，确认同一 `X-Integration-Run-ID` 不产生重复外部副作用。
 5. 将演练日期、负责人、依赖状态、恢复时间、失败项和整改计划写入受控运维记录。

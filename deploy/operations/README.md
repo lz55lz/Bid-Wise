@@ -18,4 +18,4 @@ $env:MINIO_SECRET_KEY = '...'
 ./verify-recovery.ps1 -BackupPath 'D:\private-backups\ai-bid-advisor\YYYYMMDD-HHMMSS'
 ```
 
-恢复时使用隔离环境，并按以下顺序执行：PostgreSQL、MinIO、由 `search_chunks` 重建 Milvus、清空 Redis 后重建队列状态、启动 API/Worker，最后检查 `/health/ready`，并抽样验证 Evidence 原件和报告 DOCX/PDF。
+恢复时使用隔离环境，并按以下顺序执行：PostgreSQL（含 `pgvector` 数据）、MinIO、清空 Redis 后重建队列状态、启动 API/Worker，最后检查 `/health/ready`，并抽样验证 Evidence 原件和报告 DOCX/PDF。

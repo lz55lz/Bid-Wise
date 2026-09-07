@@ -1,7 +1,6 @@
 [CmdletBinding()]
 param(
     [switch]$Restart,
-    [switch]$SkipInfrastructure,
     [switch]$SkipMigrations,
     [switch]$SkipWorker,
     [ValidateRange(1, 65535)][int]$ApiPort = 8000
@@ -60,7 +59,6 @@ $environmentValues = Get-EnvironmentFileValues -ProjectRoot $projectRoot
 $requiredValues = @(
     'DATABASE_URL', 'REDIS_URL', 'JWT_SECRET_KEY',
     'MINIO_ENDPOINT', 'MINIO_ACCESS_KEY', 'MINIO_SECRET_KEY',
- 'MILVUS_URI',
     'CHAT_BASE_URL', 'CHAT_API_KEY',
     'RERANKER_BASE_URL', 'EMBEDDING_BASE_URL',
     'MINERU_BASE_URL', 'MINERU_API_KEY'
@@ -75,15 +73,6 @@ if (!(Test-Path -LiteralPath $python)) {
 
 if ($Restart) {
     & (Join-Path $PSScriptRoot 'stop-local.ps1')
-}
-
-if (!$SkipInfrastructure) {
-    Assert-EnvironmentValues -Values $environmentValues -Names @('MILVUS_MINIO_ADDRESS')
-    $docker = Assert-CommandAvailable -Name 'docker'
-    Invoke-CheckedCommand -FilePath $docker -ArgumentList @(
- 'compose', '--profile', 'vector', 'up', '-d', 'etcd', 'milvus'
-    ) -WorkingDirectory $projectRoot
-    Wait-ForTcpPort -HostName '127.0.0.1' -Port 19530 -TimeoutSeconds 120
 }
 
 if (!$SkipMigrations) {

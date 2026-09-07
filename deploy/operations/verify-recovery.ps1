@@ -30,4 +30,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Output 'Backup artifacts and manifest are internally consistent.'
-Write-Output 'Restore order: PostgreSQL, MinIO, Milvus rebuild from search_chunks, Redis flush/rebuild, API and Worker readiness checks.'
+Write-Output 'Restore order: PostgreSQL (including pgvector data), MinIO, Redis flush/rebuild, API and Worker readiness checks.'
