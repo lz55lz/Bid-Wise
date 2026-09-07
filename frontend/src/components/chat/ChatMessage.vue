@@ -15,10 +15,20 @@
         <div v-if="isStreaming" class="typing-indicator">
           <span></span><span></span><span></span>
         </div>
-        <MarkdownRenderer :content="message.content || ' '" />
+        <MarkdownRenderer :content="message.content || ' '" :citations="message.citations" />
       </div>
 
       <ChatCitations v-if="message.citations?.length" :citations="message.citations" />
+
+      <details v-if="message.role === 'assistant' && message.agent_trace?.length" class="agent-trace">
+        <summary>Agent 执行轨迹（{{ message.agent_trace.length }} 步）</summary>
+        <div v-for="(item, index) in message.agent_trace" :key="`${item.tool}-${index}`" class="trace-row">
+          <span>{{ index + 1 }}. {{ item.tool }}</span>
+          <span>{{ item.evidence_count || 0 }} 条 Evidence</span>
+          <span>{{ item.elapsed_ms }} ms</span>
+          <el-tag :type="item.status === 'completed' ? 'success' : item.status === 'blocked' ? 'warning' : 'danger'" size="small">{{ item.status }}</el-tag>
+        </div>
+      </details>
 
       <div v-if="!isStreaming" class="message-actions">
         <button class="action-btn" title="复制" @click="copyContent">
@@ -87,6 +97,19 @@ async function copyContent() {
   gap: var(--spacing-4);
   animation: messageSlideIn 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
+
+.agent-trace {
+  margin-top: 10px;
+  padding: 9px 12px;
+  border: 1px solid #dfe8f5;
+  border-radius: 8px;
+  color: #5c6980;
+  font-size: 12px;
+  background: #f8fbff;
+}
+
+.agent-trace summary { cursor: pointer; color: #315b9a; }
+.trace-row { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
 
 .chat-message.user {
   flex-direction: row-reverse;
@@ -166,10 +189,33 @@ async function copyContent() {
 }
 
 .user .message-bubble {
-  background: linear-gradient(135deg, var(--color-accent), var(--color-accent-hover));
-  color: white;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #fff;
   border-bottom-right-radius: var(--radius-md);
-  box-shadow: var(--shadow-md), 0 4px 12px rgba(3, 105, 161, 0.25);
+  box-shadow: var(--shadow-md), 0 4px 12px rgba(29, 78, 216, 0.25);
+}
+
+/* MarkdownRenderer has global element styles; force a high-contrast user bubble. */
+.user .message-bubble :deep(.markdown-body),
+.user .message-bubble :deep(.markdown-body p),
+.user .message-bubble :deep(.markdown-body strong),
+.user .message-bubble :deep(.markdown-body em),
+.user .message-bubble :deep(.markdown-body li),
+.user .message-bubble :deep(.markdown-body h1),
+.user .message-bubble :deep(.markdown-body h2),
+.user .message-bubble :deep(.markdown-body h3),
+.user .message-bubble :deep(.markdown-body h4) {
+  color: #fff;
+}
+
+.user .message-bubble :deep(.markdown-body a) {
+  color: #fff;
+  font-weight: 600;
+}
+
+.user .message-bubble :deep(.markdown-body code) {
+  color: #fff;
+  background: rgba(255, 255, 255, .16);
 }
 
 .assistant .message-bubble {

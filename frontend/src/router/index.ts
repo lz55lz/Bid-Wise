@@ -114,17 +114,20 @@ router.beforeEach(async (to, _from, next) => {
   // 设置页面标题
   document.title = `${to.meta.title || 'BidWise'} - BidWise`
 
-  if (requiresAuth && !authStore.isAuthenticated()) {
-    // 检查是否有 token
-    if (authStore.token) {
-      try {
-        await authStore.fetchCurrentUser()
+  if (requiresAuth) {
+    // 刷新后 Pinia 内存状态会清空，但令牌仍保存在 localStorage；必须回查当前用户，
+    // 不能仅凭前端令牌字符串放行路由。
+    if (!authStore.isAuthenticated()) {
+      next('/login')
+    } else if (!authStore.user) {
+      const user = await authStore.fetchCurrentUser()
+      if (user) {
         next()
-      } catch {
+      } else {
         next('/login')
       }
     } else {
-      next('/login')
+      next()
     }
   } else if (to.path === '/login' && authStore.isAuthenticated()) {
     next('/')

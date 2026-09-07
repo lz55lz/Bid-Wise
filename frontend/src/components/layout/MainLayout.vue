@@ -187,7 +187,8 @@ const handleCommand = async (command: string) => {
 
 <style scoped>
 .main-layout {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -291,6 +292,7 @@ const handleCommand = async (command: string) => {
 .main-content {
   background: var(--color-background);
   padding: var(--spacing-6);
+  min-height: 0;
   overflow-y: auto;
 }
 </style>

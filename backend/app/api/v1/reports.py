@@ -1,101 +1,72 @@
-"""Bid report generation API.
-
-Submit report generation tasks (simple/detailed) and download generated reports
-in DOCX, PDF, or Markdown format. Reports summarize bid qualification results,
-risks, and recommendations.
-"""
+"""项目报告 HTTP 接口。"""
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
-from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Query, status
+from fastapi.responses import Response
 
-from app.api.deps import CurrentUser, get_current_user
-from app.core.config import get_settings
-from app.db.session import get_db_session
-from app.integrations.object_storage import MinioObjectStorage
-from app.integrations.task_publisher import ArqTaskPublisher
-from app.schemas.documents import TaskResponse
-from app.schemas.reports import ReportResponse, ReportType
-from app.services.report_service import ReportService
+from app.api.deps import ApplicationSettings, CurrentUser, DatabaseSession
+from app.modules.reports.export_service import ReportExportService
+from app.modules.reports.schemas import ProjectReportResponse
+from app.modules.reports.service import ProjectReportService
 
-router = APIRouter(tags=["reports"])
+router = APIRouter(prefix="/projects/{project_id}/reports", tags=["项目报告"])
 
 
-def _service(session: Session) -> ReportService:
-    return ReportService(session, MinioObjectStorage(get_settings()))
-
-
-@router.post(
-    "/projects/{project_id}/reports",
-    response_model=TaskResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def generate_report(
-    # Submit async report generation task.
-    # report_type: SIMPLE or DETAILED
+@router.post("", response_model=ProjectReportResponse, status_code=status.HTTP_202_ACCEPTED)
+async def submit_project_report(
     project_id: UUID,
-    report_type: ReportType = "SIMPLE",
-    current_user: CurrentUser = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> TaskResponse:
-    return _service(session).submit(
-        project_id, current_user.id, current_user.role_codes, ArqTaskPublisher(),
-        report_type=report_type,
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+    report_type: str = Query(default="SIMPLE", pattern="^(SIMPLE|FULL)$"),
+) -> ProjectReportResponse:
+    """根据已确认发现项提交一份不可变 Markdown 报告。"""
+    return await ProjectReportService(session, settings).submit(
+        project_id, current_user, report_type=report_type
     )
 
 
-@router.post(
-    "/projects/{project_id}/reports/generate",
-    response_model=TaskResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-    include_in_schema=False,
-)
-def generate_report_legacy(
-    # Legacy endpoint: same as POST /projects/{project_id}/reports
+@router.get("/latest", response_model=ProjectReportResponse | None)
+async def get_latest_project_report(
     project_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> TaskResponse:
-    return _service(session).submit(
-        project_id, current_user.id, current_user.role_codes, ArqTaskPublisher()
-    )
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+) -> ProjectReportResponse | None:
+    """读取项目最近一份已完成报告。"""
+    return await ProjectReportService(session, settings).latest(project_id, current_user)
 
 
-@router.get("/projects/{project_id}/reports", response_model=ReportResponse | None)
-def get_latest_report(
-    # Get the most recent report for a project (if any).
+@router.get("/{report_id}", response_model=ProjectReportResponse)
+async def get_project_report(
     project_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> ReportResponse | None:
-    return _service(session).latest(project_id, current_user.id, current_user.role_codes)
-
-
-@router.get("/reports/{report_id}", response_model=ReportResponse)
-def get_report(
-    # Get a specific report by ID.
     report_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> ReportResponse:
-    return _service(session).get(report_id, current_user.id, current_user.role_codes)
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+) -> ProjectReportResponse:
+    """按项目范围读取指定报告。"""
+    return await ProjectReportService(session, settings).get(project_id, report_id, current_user)
 
 
-@router.get("/reports/{report_id}/download")
-def download_report(
-    # Download a generated report in DOCX, PDF, or MD format.
+@router.get("/{report_id}/download")
+async def download_project_report(
+    project_id: UUID,
     report_id: UUID,
-    report_format: str = Query(alias="format", pattern="^(docx|pdf|md)$"),
-    current_user: CurrentUser = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> StreamingResponse:
-    download = _service(session).create_authorized_download(
-        report_id, report_format, current_user.id, current_user.role_codes
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+    report_format: str = Query(alias="format", pattern="^(md|docx|pdf)$"),
+) -> Response:
+    """导出同一冻结报告的 Markdown、DOCX 或 PDF，不重新调用模型。"""
+    export = await ReportExportService(session, settings).export(
+        project_id, report_id, current_user, report_format
     )
-    return StreamingResponse(
-        download.stream,
-        media_type=download.mime_type,
-        headers={"Content-Disposition": f'attachment; filename="{download.file_name}"'},
+    return Response(
+        content=export.content,
+        media_type=export.mime_type,
+        headers={
+            "Content-Disposition": f"attachment; filename=report-{report_id}.{export.extension}"
+        },
     )

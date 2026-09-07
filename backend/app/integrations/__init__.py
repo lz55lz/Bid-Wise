@@ -1,1 +1,1 @@
-"""Adapters for infrastructure owned by deployment, never by API routes."""
+"""与部署外部系统交互的适配器；不得包含领域授权或流程规则。"""

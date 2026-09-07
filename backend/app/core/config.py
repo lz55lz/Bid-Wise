@@ -1,66 +1,59 @@
+"""部署环境配置；模型标识不允许通过环境变量覆盖。"""
+
 from functools import lru_cache
-from pathlib import Path
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-ROOT_DIR = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
-    """部署配置；模型标识从不属于配置。"""
+    """仅接收部署所需配置，缺少 AI 地址或密钥时 AI 能力不可执行。"""
 
-    model_config = SettingsConfigDict(
-        env_file=ROOT_DIR / ".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str | None = None
-    redis_url: str | None = None
+    app_env: str = "development"
+    # 数据库与 Redis 是应用底座：前者保存业务事实，后者只承担队列、锁与短期状态。
+    database_url: str
+    redis_url: str
+
+    # 认证密钥只在后端部署环境中存在，禁止由请求、前端或数据库记录覆盖。
     jwt_secret_key: SecretStr | None = None
-    jwt_access_token_minutes: int = 10080  # 7 days
+    jwt_access_token_minutes: int = 480
 
+    # 文件对象保存在 MinIO；对象键不能被当作授权依据，访问前必须回查 PostgreSQL。
     minio_endpoint: str | None = None
     minio_access_key: SecretStr | None = None
     minio_secret_key: SecretStr | None = None
-    minio_bucket: str = "ai-bid-advisor"
+    minio_bucket: str = "bid-wise"
     max_upload_bytes: int = 100 * 1024 * 1024
 
-    # MinerU may be self-hosted or the official hosted API. It is intentionally
-    # optional so project/file management remains available when parsing is
-    # not deployed. The worker reports a retryable parser failure instead.
     mineru_base_url: str | None = None
     mineru_api_key: SecretStr | None = None
 
+    # 以下全部是部署连接信息；模型名称固定在 constants.py，绝不接受环境变量覆盖。
     llm_base_url: str | None = None
     llm_api_key: SecretStr | None = None
-    # Existing local LLM deployments expose these names. They are deployment
-    # Connection aliases only; model IDs remain server-side constants.
-    chat_base_url: str | None = None
-    chat_api_key: SecretStr | None = None
-    reranker_base_url: str | None = None
-    reranker_api_key: SecretStr | None = None
+    # 单个长任务内部的 LLM 批次并发；Worker 本身还有 max_jobs，总并发需两层共同控制。
+    llm_batch_concurrency: int = Field(default=3, ge=1, le=8)
     embedding_base_url: str | None = None
     embedding_api_key: SecretStr | None = None
+    reranker_base_url: str | None = None
+    reranker_api_key: SecretStr | None = None
 
-    # P2 connector endpoints are deployment-only values. Connector codes, request
-    # actions and all authorization rules remain fixed in server code.
-    erp_integration_base_url: str | None = None
-    erp_integration_api_key: SecretStr | None = None
-    crm_integration_base_url: str | None = None
-    crm_integration_api_key: SecretStr | None = None
-    public_resource_integration_base_url: str | None = None
-    public_resource_integration_api_key: SecretStr | None = None
+    @property
+    def llm_is_configured(self) -> bool:
+        """LLM 专用任务只依赖 MiniMax 连接，不应被向量或重排配置无端阻塞。"""
+        return bool(self.llm_base_url and self.llm_api_key)
 
-    @model_validator(mode="after")
-    def use_chat_llm_configuration(self) -> "Settings":
-        """Reuse the established local CHAT_* deployment credentials."""
-        if not self.llm_base_url and self.chat_base_url:
-            self.llm_base_url = self.chat_base_url
-        if not self.llm_api_key and self.chat_api_key:
-            self.llm_api_key = self.chat_api_key
-        return self
+    @property
+    def embedding_is_configured(self) -> bool:
+        """本地/内网 bge-m3 可无鉴权运行，地址存在即表示可调用。"""
+        return bool(self.embedding_base_url)
+
+    @property
+    def reranker_is_configured(self) -> bool:
+        """rankv2 与 embedding 一样支持无 API Key 的内网部署。"""
+        return bool(self.reranker_base_url)
 
     @property
     def ai_is_configured(self) -> bool:
@@ -68,17 +61,10 @@ class Settings(BaseSettings):
             (
                 self.llm_base_url,
                 self.llm_api_key,
-                self.reranker_base_url,
                 self.embedding_base_url,
+                self.reranker_base_url,
             )
         )
-
-    @property
-    def llm_model_name(self) -> str:
-        """Fixed server-owned model ID; never accept an environment override."""
-        from app.core.constants import LLM_MODEL_ID
-
-        return LLM_MODEL_ID
 
 
 @lru_cache

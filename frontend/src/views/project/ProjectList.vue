@@ -68,7 +68,7 @@
 
         <el-table-column prop="region" label="地区" width="120" />
 
-        <el-table-column prop="bid_deadline" label="截止时间" width="140">
+        <el-table-column prop="bid_deadline" label="截止时间" width="170">
           <template #default="{ row }">
             <span class="deadline-text" :class="{ overdue: isOverdue(row.bid_deadline) }">
               {{ formatDate(row.bid_deadline) }}
@@ -76,15 +76,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="status" label="状态" width="100">
-          <template #default="{ row }">
-            <span :class="['badge', `badge-${getStatusClass(row.status)}`]">
-              {{ getStatusText(row.status) }}
-            </span>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="当前阶段" width="160">
+        <el-table-column label="当前阶段" min-width="180">
           <template #default="{ row }">
             <span class="project-phase">{{ getProjectPhase(row) }}</span>
           </template>
@@ -197,7 +189,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores'
-import { documentApi, enterpriseApi, reportApi } from '@/api'
+import { documentApi, enterpriseApi, projectApi } from '@/api'
 import { usePendingTenderUpload } from '@/composables/usePendingTenderUpload'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search, FolderOpened, Loading } from '@element-plus/icons-vue'
@@ -255,13 +247,16 @@ const createRules: FormRules = {
 const fetchProjects = async () => {
   loading.value = true
   try {
-    const params = {
-      status: statusFilter.value || undefined,
-    }
-    const response = await projectStore.fetchProjects(params)
+    const [response, projections] = await Promise.all([
+      projectStore.fetchProjects(),
+      projectApi.listStatusProjections(),
+    ])
     if (Array.isArray(response)) {
       // 前端过滤
       let filtered = response
+      if (statusFilter.value) {
+        filtered = filtered.filter(p => p.status === statusFilter.value)
+      }
       if (typeFilter.value) {
         filtered = filtered.filter(p => p.project_type === typeFilter.value)
       }
@@ -273,23 +268,9 @@ const fetchProjects = async () => {
       }
       projects.value = filtered
       total.value = filtered.length
-      const phaseResults = await Promise.allSettled(
-        filtered.map(async (project) => ({
-          projectId: project.id,
-          report: await reportApi.latest(project.id),
-        })),
+      projectPhases.value = Object.fromEntries(
+        projections.map(item => [item.project_id, item.phase.label]),
       )
-      const phases: Record<string, string> = {}
-      for (const result of phaseResults) {
-        if (result.status !== 'fulfilled') continue
-        const { projectId, report } = result.value
-        phases[projectId] = report?.status === 'READY'
-          ? '报告已生成'
-          : report?.status === 'GENERATING'
-            ? '报告生成中'
-            : getBaseProjectPhase(filtered.find(project => project.id === projectId)?.status)
-      }
-      projectPhases.value = phases
     }
   } finally {
     loading.value = false
@@ -395,24 +376,6 @@ const getTypeText = (type: string) => {
   return map[type] || type
 }
 
-const getStatusText = (status: string) => {
-  const map: Record<string, string> = {
-    DRAFT: '草稿',
-    ACTIVE: '进行中',
-    ARCHIVED: '已归档',
-  }
-  return map[status] || status
-}
-
-const getStatusClass = (status: string) => {
-  const map: Record<string, string> = {
-    DRAFT: 'draft',
-    ACTIVE: 'active',
-    ARCHIVED: 'pending',
-  }
-  return map[status] || 'pending'
-}
-
 const formatDate = (date: string) => {
   return dayjs(date).format('YYYY-MM-DD HH:mm')
 }
@@ -421,13 +384,9 @@ const isOverdue = (deadline: string) => {
   return dayjs(deadline).isBefore(dayjs())
 }
 
-const getBaseProjectPhase = (status?: string) => ({
-  DRAFT: '待上传招标文件',
-  ACTIVE: '投标准备中',
-  ARCHIVED: '项目已归档',
-} as Record<string, string>)[status || ''] || '状态待更新'
-
-const getProjectPhase = (project: any) => projectPhases.value[project.id] || getBaseProjectPhase(project.status)
+// 与工作台复用同一个后端投影，浏览器不再通过报告状态拼接阶段。
+const getProjectPhase = (project: { id?: string }) =>
+  project.id ? projectPhases.value[project.id] || '状态待更新' : '状态待更新'
 
 onMounted(() => {
   fetchProjects()
@@ -516,6 +475,7 @@ onMounted(() => {
 .deadline-text {
   font-size: var(--font-size-sm);
   color: var(--color-text-primary);
+  white-space: nowrap;
 }
 
 .deadline-text.overdue {

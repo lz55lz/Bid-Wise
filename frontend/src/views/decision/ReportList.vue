@@ -19,9 +19,9 @@
           </span>
         </div>
 
-        <h3 class="report-title">投标分析报告 v{{ report.version_no }}</h3>
+        <h3 class="report-title">{{ report.report_type === 'FULL' ? '完整投标分析报告' : '投标分析报告' }}</h3>
         <p class="report-meta">
-          生成时间：{{ formatDate(report.generated_at || report.created_at) }}
+          生成时间：{{ formatDate(report.completed_at || report.created_at) }}
         </p>
 
         <div v-if="report.status === 'READY'" class="report-actions">
@@ -55,11 +55,11 @@
 
     <el-drawer v-model="showDetail" :title="selectedReport ? `${selectedReport.project_name} · 报告摘要` : '报告摘要'" size="680px">
       <template v-if="selectedReport">
-        <el-alert title="以下内容来自已生成报告章节；每章均保留原文证据关联。" type="info" :closable="false" />
-        <el-collapse class="report-sections" :model-value="selectedReport.sections?.map(section => section.section_code)">
-          <el-collapse-item v-for="section in selectedReport.sections" :key="section.section_code" :name="section.section_code">
-            <template #title>{{ section.order_no }}. {{ section.section_code }} · {{ section.evidence_ids.length }} 条依据</template>
-            <pre class="section-content">{{ section.content_markdown }}</pre>
+        <el-alert title="以下内容来自冻结后的报告正文；“项目证据”可在项目详情中查看原文与章节定位。" type="info" :closable="false" />
+        <el-collapse class="report-sections" :model-value="selectedReport.sections?.map(section => section.title)">
+          <el-collapse-item v-for="section in selectedReport.sections" :key="section.title" :name="section.title">
+            <template #title>{{ section.title }}</template>
+            <MarkdownRenderer :content="section.content_markdown" :citations="selectedReport.citations" class="section-content" />
           </el-collapse-item>
         </el-collapse>
       </template>
@@ -81,6 +81,7 @@ import { ElMessage } from 'element-plus'
 import { FolderOpened, Document, Warning } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { projectApi, reportApi } from '@/api'
+import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import type { Report } from '@/types'
 
 const router = useRouter()
@@ -96,7 +97,7 @@ const showDetail = ref(false)
 
 const openReport = async (report: ReportWithProject) => {
   try {
-    selectedReport.value = { ...report, ...(await reportApi.get(report.id)) }
+    selectedReport.value = { ...report, ...(await reportApi.get(report.project_id, report.id)) }
     showDetail.value = true
   } catch (err: any) {
     ElMessage.error(err?.message || '加载报告摘要失败')
@@ -106,7 +107,7 @@ const openReport = async (report: ReportWithProject) => {
 const handleDownload = async (report: ReportWithProject, format: 'docx' | 'pdf' | 'md') => {
   downloadingId.value = report.id
   try {
-    await reportApi.download(report.id, format)
+    await reportApi.download(report.project_id, report.id, format)
   } catch (err: any) {
     ElMessage.error(err?.message || '下载失败')
   } finally {
@@ -124,8 +125,8 @@ const handleRetry = async (report: ReportWithProject) => {
   }
 }
 
-const getStatusClass = (s: string) => ({ PENDING: 'draft', GENERATING: 'draft', READY: 'active', FAILED: 'failed' }[s] || 'draft')
-const getStatusText = (s: string) => ({ PENDING: '待生成', GENERATING: '生成中', READY: '已完成', FAILED: '失败' }[s] || s)
+const getStatusClass = (s: string) => ({ QUEUED: 'draft', GENERATING: 'draft', READY: 'active', FAILED: 'failed' }[s] || 'draft')
+const getStatusText = (s: string) => ({ QUEUED: '待生成', GENERATING: '生成中', READY: '已完成', FAILED: '失败' }[s] || s)
 const formatDate = (d: string) => dayjs(d).format('YYYY-MM-DD HH:mm')
 
 onMounted(async () => {

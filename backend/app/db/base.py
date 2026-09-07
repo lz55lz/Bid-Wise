@@ -1,19 +1,7 @@
-from datetime import datetime
-from uuid import UUID
+"""所有 SQLAlchemy ORM 模型共用的 Declarative Base。"""
 
-from sqlalchemy import DateTime, MetaData
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase
 
 
 class Base(DeclarativeBase):
-    metadata = MetaData(schema="app")
-
-
-class TimestampMixin:
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class ActorMixin:
-    created_by: Mapped[UUID | None] = mapped_column(nullable=True)
-    updated_by: Mapped[UUID | None] = mapped_column(nullable=True)
+    """Alembic 从这里收集迁移元数据。"""

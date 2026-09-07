@@ -5,7 +5,7 @@
         <div v-if="message.role === 'assistant'" class="avatar">
           <el-icon><ChatLineRound /></el-icon>
         </div>
-        <MarkdownRenderer v-if="message.role === 'assistant'" :content="message.content" class="text" />
+        <MarkdownRenderer v-if="message.role === 'assistant'" :content="message.content" :citations="message.citations" class="text" />
         <div v-else class="text">{{ message.content }}</div>
         <div v-if="message.role === 'user'" class="avatar">
           <el-icon><User /></el-icon>
@@ -13,9 +13,9 @@
       </div>
       <div v-if="message.citations && message.citations.length" class="citations">
         <div class="citations-title">参考证据：</div>
-        <div v-for="cite in message.citations" :key="cite.evidence_id" class="citation-item">
-          <el-tag size="small" type="info">{{ cite.evidence_id.slice(0, 8) }}...</el-tag>
-          <span v-if="cite.content" class="citation-content">{{ cite.content }}</span>
+        <div v-for="(cite, index) in message.citations" :key="cite.evidence_id || cite.knowledge_chunk_id || cite.report_id || index" class="citation-item">
+          <el-tag size="small" type="info">{{ sourceLabel(cite.source) }}</el-tag>
+          <span class="citation-content">{{ cite.quoted_text || cite.content || '原文节选不可用' }}</span>
         </div>
       </div>
     </div>
@@ -25,11 +25,17 @@
 <script setup lang="ts">
 import { ChatLineRound, User } from '@element-plus/icons-vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
-import type { ChatMessage } from '@/types'
+import type { ChatMessage, Citation } from '@/types'
 
 defineProps<{
   message: ChatMessage
 }>()
+
+function sourceLabel(source?: Citation['source']) {
+  if (source === 'LEGAL_KNOWLEDGE') return '法规依据'
+  if (source === 'PROJECT_REPORT') return '项目报告'
+  return '项目原文'
+}
 </script>
 
 <style scoped>

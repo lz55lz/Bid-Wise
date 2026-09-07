@@ -8,12 +8,16 @@
       <div v-show="expanded" class="citations-list">
         <div
           v-for="(cite, index) in citations"
-          :key="cite.evidence_id"
+          :key="cite.evidence_id || cite.knowledge_chunk_id || cite.report_id || index"
           class="citation-item"
         >
           <span class="citation-index">[{{ index + 1 }}]</span>
-          <span class="citation-id">{{ cite.evidence_id.slice(0, 8) }}</span>
-          <span v-if="cite.content" class="citation-content">{{ cite.content }}</span>
+          <div class="citation-content">
+            <strong>{{ sourceLabel(cite.source) }}</strong>
+            <div class="citation-quote" v-html="renderQuote(cite.quoted_text || cite.content || '原文节选不可用')" />
+            <small v-if="cite.locator?.section_path">{{ cite.locator.section_path }}</small>
+            <small v-else-if="cite.locator?.title">{{ cite.locator.title }}</small>
+          </div>
         </div>
       </div>
     </transition>
@@ -23,6 +27,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { ArrowDown } from '@element-plus/icons-vue'
+import DOMPurify from 'dompurify'
+import { renderMarkdown } from '@/composables/useMarkdown'
 import type { Citation } from '@/types'
 
 const props = withDefaults(defineProps<{
@@ -33,6 +39,23 @@ const props = withDefaults(defineProps<{
 })
 
 const expanded = ref(props.defaultExpanded)
+
+function sourceLabel(source?: Citation['source']) {
+  if (source === 'LEGAL_KNOWLEDGE') return '法规依据'
+  if (source === 'PROJECT_REPORT') return '项目报告'
+  return '项目原文'
+}
+
+function renderQuote(value: unknown) {
+  const text = String(value || '')
+  // MinerU 表格偶尔产出 `\<table>`；只还原表格相关标签，避免把普通反斜杠误改为 HTML。
+  const normalized = text.replace(/\\(?=<\/?(?:table|thead|tbody|tr|th|td)\b)/gi, '')
+  if (!/<\/?table\b/i.test(normalized)) return renderMarkdown(normalized)
+  return DOMPurify.sanitize(normalized, {
+    ALLOWED_TAGS: ['table', 'thead', 'tbody', 'tr', 'th', 'td', 'p', 'br', 'strong', 'em'],
+    ALLOWED_ATTR: ['rowspan', 'colspan'],
+  })
+}
 </script>
 
 <style scoped>
@@ -95,22 +118,18 @@ const expanded = ref(props.defaultExpanded)
   min-width: 18px;
 }
 
-.citation-id {
-  color: var(--color-text-muted);
-  flex-shrink: 0;
-  font-family: 'SF Mono', Monaco, monospace;
-  font-size: 10px;
-  padding: 1px 4px;
-  background: var(--color-background);
-  border-radius: var(--radius-sm);
-}
-
 .citation-content {
   flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
 }
+
+.citation-content strong { color: var(--color-text-primary); font-size: 12px; }
+.citation-quote { margin: 3px 0; color: var(--color-text-secondary); white-space: pre-wrap; }
+.citation-quote :deep(p) { margin: 3px 0; }
+.citation-quote :deep(table) { width: 100%; margin: 6px 0; border-collapse: collapse; white-space: normal; }
+.citation-quote :deep(th), .citation-quote :deep(td) { padding: 6px 8px; border: 1px solid var(--color-border); text-align: left; vertical-align: top; }
+.citation-quote :deep(th) { background: var(--color-background); font-weight: 600; }
+.citation-content small { color: var(--color-text-muted); }
 
 .fade-enter-active,
 .fade-leave-active {

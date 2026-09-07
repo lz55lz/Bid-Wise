@@ -1,56 +1,34 @@
-"""Bid analysis run management API.
-
-Submit bid analysis tasks (requirement extraction + qualification matching + risk check)
-and query analysis history for a project.
-"""
+"""异步项目发现项分析 HTTP 接口。"""
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, status
 
-from app.api.deps import CurrentUser, get_current_user
-from app.db.session import get_db_session
-from app.integrations.task_publisher import ArqTaskPublisher
-from app.schemas.analysis import AnalysisRunResponse
-from app.schemas.documents import TaskResponse
-from app.services.analysis_service import AnalysisService
+from app.api.deps import ApplicationSettings, CurrentUser, DatabaseSession
+from app.modules.analysis.schemas import FindingAnalysisJobResponse
+from app.modules.analysis.service import FindingAnalysisService
 
-router = APIRouter(tags=["analysis-runs"])
+router = APIRouter(prefix="/projects/{project_id}/finding-analysis", tags=["AI 发现项分析"])
 
 
-@router.post(
-    "/projects/{project_id}/analysis-runs",
-    response_model=TaskResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def submit_analysis_run(
-    # Submit a full bid analysis run (extract requirements, match qualifications, assess risks).
-    # Returns async task ID for status polling.
+@router.post("", response_model=FindingAnalysisJobResponse, status_code=status.HTTP_202_ACCEPTED)
+async def submit_finding_analysis(
     project_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> TaskResponse:
-    return AnalysisService(session).submit(
-        project_id, current_user.id, current_user.role_codes, ArqTaskPublisher()
-    )
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+) -> FindingAnalysisJobResponse:
+    """冻结当前 Evidence 后提交 MiniMax-M3 分析任务。"""
+    return await FindingAnalysisService(session, settings).submit(project_id, current_user)
 
 
-@router.get("/projects/{project_id}/analysis-runs", response_model=list[AnalysisRunResponse])
-def list_analysis_runs(
-    # List all analysis runs for a project (newest first).
+@router.get("/{job_id}", response_model=FindingAnalysisJobResponse)
+async def get_finding_analysis(
     project_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> list[AnalysisRunResponse]:
-    return AnalysisService(session).list(project_id, current_user.id, current_user.role_codes)
-
-
-@router.get("/analysis-runs/{run_id}", response_model=AnalysisRunResponse)
-def get_analysis_run(
-    # Get a specific analysis run by ID.
-    run_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> AnalysisRunResponse:
-    return AnalysisService(session).get(run_id, current_user.id, current_user.role_codes)
+    job_id: UUID,
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+) -> FindingAnalysisJobResponse:
+    """查询任务状态；成员校验和项目归属校验均在服务端执行。"""
+    return await FindingAnalysisService(session, settings).get(project_id, job_id, current_user)
