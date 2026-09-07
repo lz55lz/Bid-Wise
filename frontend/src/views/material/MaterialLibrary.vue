@@ -84,7 +84,7 @@
                       </span>
                       <span v-else class="no-expiry">长期有效</span>
                       <span :class="['status-badge', m.status === 'CONFIRMED' ? 'active' : 'inactive']">
-                        {{ m.status === 'CONFIRMED' ? '有效' : '待确认' }}
+                        {{ m.status === 'CONFIRMED' ? '有效' : m.status === 'ARCHIVED' ? '已归档' : '待确认' }}
                       </span>
                     </div>
                     <div class="material-actions">

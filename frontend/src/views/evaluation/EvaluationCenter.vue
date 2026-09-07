@@ -4,12 +4,12 @@
       <div>
         <small>QUALITY EVALUATION</small>
         <h1>评测中心</h1>
-        <p>默认只验证法律知识；选择项目后再同时验证项目文件检索。</p>
+        <p>用固定题集验证法律知识库和项目文件检索是否能命中期望原文。</p>
       </div>
       <div class="header-actions">
         <el-button @click="openCreate">新建题集</el-button>
         <el-button type="primary" :icon="VideoPlay" :loading="running" @click="run">
-          运行评测
+          {{ running ? '评测执行中…' : '运行评测' }}
         </el-button>
       </div>
     </header>
@@ -17,10 +17,9 @@
     <section class="panel controls">
       <div>
         <h2>选择评测题集</h2>
-        <p>内置基准集未选项目时只运行法律题；自定义题集用于补充你的业务问题。</p>
+        <p>项目范围题需要选择项目；法律知识题可不选项目。</p>
       </div>
-      <el-select v-model="selectedSetId" clearable placeholder="内置基准集" class="set-select">
-        <el-option label="内置基准集（只读）" value="" />
+      <el-select v-model="selectedSetId" placeholder="请选择评测题集" class="set-select">
         <el-option
           v-for="item in enabledSets"
           :key="item.id"
@@ -63,7 +62,7 @@
         <div><h2>本次真实结果</h2><p>通过代表前 5 条检索结果中出现了预期原文，不代表最终回答已通过人工审查。</p></div>
         <el-tag :type="result.passed === result.total ? 'success' : 'warning'">{{ result.passed }}/{{ result.total }} 题命中</el-tag>
       </div>
-      <div class="stats"><div><b>{{ Math.round(result.recall_at_5 * 100) }}%</b><span>Recall@5</span></div><div><b>{{ result.elapsed_ms }} ms</b><span>总耗时</span></div><div><b>{{ result.total }}</b><span>已执行题数</span></div><div v-if="result.skipped"><b>{{ result.skipped }}</b><span>未执行（未选项目）</span></div></div>
+        <div class="stats"><div><b>{{ Math.round(result.recall_at_5 * 100) }}%</b><span>Recall@5</span></div><div><b>{{ result.elapsed_ms }} ms</b><span>总耗时</span></div><div><b>{{ result.total }}</b><span>已执行题数</span></div><div v-if="result.skipped"><b>{{ result.skipped }}</b><span>未执行（未选项目）</span></div></div>
       <el-table :data="result.results" stripe>
         <el-table-column type="expand"><template #default="{ row }"><div class="detail"><b>期望证据</b><p>{{ row.expected?.join('；') || '未配置' }}</p><b>实际命中原文</b><p>{{ row.matched_excerpt || '未在前 5 条结果中命中' }}</p></div></template></el-table-column>
         <el-table-column prop="question" label="测试问题" min-width="280" />
@@ -72,6 +71,8 @@
         <el-table-column label="说明" min-width="220"><template #default="{ row }">{{ row.error || (row.passed ? '前 5 条结果包含期望证据' : '前 5 条结果未找到期望证据') }}</template></el-table-column>
       </el-table>
     </section>
+
+    <section v-if="runs.length" class="panel"><div class="head"><div><h2>最近运行</h2><p>结果已持久化，可对比 Agent 与受控 RAG。</p></div><el-button text @click="loadRuns">刷新</el-button></div><el-table :data="runs" stripe><el-table-column label="模式" width="140"><template #default="{ row }">{{ row.mode === 'agent' ? 'Agent' : '受控 RAG' }}</template></el-table-column><el-table-column prop="status" label="状态" width="120" /><el-table-column label="Recall@5" width="120"><template #default="{ row }">{{ row.result ? `${Math.round(row.result.recall_at_5 * 100)}%` : '-' }}</template></el-table-column><el-table-column label="耗时" width="130"><template #default="{ row }">{{ row.result ? `${row.result.elapsed_ms} ms` : '-' }}</template></el-table-column><el-table-column label="结果" min-width="180"><template #default="{ row }">{{ row.error_message || (row.result ? `${row.result.passed}/${row.result.total} 题命中` : '等待 Worker 执行') }}</template></el-table-column></el-table></section>
 
     <section v-else class="empty"><el-icon><DataAnalysis /></el-icon><h2>还没有评测结果</h2><p>选择题集后点击“运行评测”，查看真实检索表现。</p></section>
 
@@ -98,7 +99,7 @@ import { DataAnalysis, VideoPlay } from '@element-plus/icons-vue'
 import { evaluationApi, projectApi, type EvaluationSet, type EvaluationSetPayload } from '@/api'
 import type { Project } from '@/types'
 
-type Result = Awaited<ReturnType<typeof evaluationApi.runRag>>
+type Result = import('@/api').EvaluationRunResult
 type EditableCase = { question: string; scope: 'knowledge' | 'project'; evidenceText: string }
 
 const result = ref<Result | null>(null)
@@ -106,6 +107,7 @@ const sets = ref<EvaluationSet[]>([])
 const selectedSetId = ref('')
 const selectedProjectId = ref('')
 const projects = ref<Project[]>([])
+const runs = ref<any[]>([])
 const running = ref(false)
 const loadingSets = ref(false)
 const saving = ref(false)
@@ -124,11 +126,12 @@ const removeCase = (index: number) => form.cases.splice(index, 1)
 const saveSet = async () => { const payload: EvaluationSetPayload = { name: form.name, description: form.description || null, cases: form.cases.map(item => ({ question: item.question, scope: item.scope, expected_evidence: item.evidenceText.split('\n').map(value => value.trim()).filter(Boolean) })) }; if (!payload.name || payload.cases.some(item => !item.question || !item.expected_evidence.length)) { ElMessage.warning('请填写题集名称、测试问题和至少一条期望原文'); return }; saving.value = true; try { if (editingId.value) await evaluationApi.updateSet(editingId.value, payload); else await evaluationApi.createSet(payload); await loadSets(); dialogVisible.value = false; ElMessage.success('题集已保存') } catch (e: any) { ElMessage.error(e?.message || '保存失败') } finally { saving.value = false } }
 const toggleEnabled = async (item: EvaluationSet) => { try { await evaluationApi.setEnabled(item.id, !item.enabled); if (!item.enabled) selectedSetId.value = item.id; if (item.enabled && selectedSetId.value === item.id) selectedSetId.value = ''; await loadSets() } catch (e: any) { ElMessage.error(e?.message || '更新状态失败') } }
 const removeSet = async (item: EvaluationSet) => { try { await evaluationApi.deleteSet(item.id); if (selectedSetId.value === item.id) selectedSetId.value = ''; await loadSets(); ElMessage.success('题集已删除') } catch (e: any) { ElMessage.error(e?.message || '删除失败') } }
-const run = async () => { running.value = true; try { result.value = await evaluationApi.runRag(selectedProjectId.value || undefined, selectedSetId.value || undefined); ElMessage.success(result.value.skipped ? `评测完成，${result.value.skipped} 道项目题未执行` : '评测完成') } catch (e: any) { ElMessage.error(e?.message || '评测失败，请确认管理员权限与知识库索引') } finally { running.value = false } }
+const loadRuns = async () => { try { runs.value = await evaluationApi.listRuns() } catch { /* evaluation history is optional */ } }
+const run = async () => { if (!selectedSetId.value) { ElMessage.warning('请先选择评测题集'); return }; running.value = true; try { const created = await evaluationApi.createRun(selectedProjectId.value || undefined, selectedSetId.value); await loadRuns(); for (let attempt = 0; attempt < 90; attempt += 1) { const current = await evaluationApi.getRun(created.id); if (current.status === 'SUCCEEDED' && current.result) { result.value = current.result; await loadRuns(); ElMessage.success('评测完成'); return }; if (current.status === 'FAILED') throw new Error(current.error_message || '评测任务失败'); await new Promise(resolve => window.setTimeout(resolve, 2000)) }; throw new Error('评测等待超时，请稍后刷新查看结果') } catch (e: any) { ElMessage.error(e?.message || '评测失败，请确认 Worker、Redis 与知识库索引') } finally { running.value = false } }
 
-onMounted(async () => { await loadSets(); try { projects.value = await projectApi.list() } catch { /* Project selection is optional for legal-only evaluation. */ } })
+onMounted(async () => { await loadSets(); await loadRuns(); try { projects.value = await projectApi.list() } catch { /* Project selection is optional for legal-only evaluation. */ } })
 </script>
 
 <style scoped>
-.page{max-width:1180px;margin:auto;padding:12px 4px 40px}.page header{display:flex;justify-content:space-between;align-items:center;padding:28px 30px;border-radius:18px;background:linear-gradient(120deg,#17264e,#31559f);color:#fff}.page header h1{margin:3px 0 7px;font-size:30px}.page header p,small{margin:0;color:#dce8ff}.page header small{letter-spacing:1.4px}.header-actions{display:flex;gap:10px}.panel{margin-top:18px;padding:22px;background:#fff;border:1px solid #e7edf7;border-radius:16px}.panel h2{margin:0 0 8px;font-size:18px}.panel p{margin:0;color:#778399}.controls{display:flex;justify-content:space-between;align-items:center;gap:24px}.set-select{width:320px}.head{display:flex;justify-content:space-between;gap:16px}.stats{display:flex;gap:48px;margin:24px 0}.stats div{display:flex;flex-direction:column}.stats b{font-size:26px}.stats span{margin-top:4px;color:#778399;font-size:13px}.detail{padding:8px 28px;color:#44506a}.detail p{margin:6px 0 16px;white-space:pre-wrap;line-height:1.7}.empty{text-align:center;padding:78px;color:#778399}.empty .el-icon{font-size:46px;color:#8aa9e5}.empty h2{margin:14px 0 8px;color:#35415a}.case-title,.case-head,.case-options{display:flex;align-items:center;justify-content:space-between;gap:12px}.case-title{margin:8px 0}.case-card{padding:14px;margin-top:10px;border:1px solid #e7edf7;border-radius:10px;background:#fafcff}.case-head{margin-bottom:10px;color:#52617c}.case-options{margin-top:10px}.case-options .el-select{width:150px}.case-options .el-input{flex:1}@media(max-width:700px){.page header,.controls{align-items:flex-start;gap:14px;flex-direction:column}.stats{gap:20px}.set-select{width:100%}.case-options{align-items:stretch;flex-direction:column}.case-options .el-select{width:100%}}
+.page{max-width:1180px;margin:auto;padding:12px 4px 40px}.page header{display:flex;justify-content:space-between;align-items:center;padding:28px 30px;border-radius:18px;background:linear-gradient(120deg,#17264e,#31559f);color:#fff}.page header h1{margin:3px 0 7px;font-size:30px}.page header p,small{margin:0;color:#dce8ff}.page header small{letter-spacing:1.4px}.header-actions{display:flex;gap:10px}.panel{margin-top:18px;padding:22px;background:#fff;border:1px solid #e7edf7;border-radius:16px}.panel h2{margin:0 0 8px;font-size:18px}.panel p{margin:0;color:#778399}.controls{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}.set-select{width:280px}.head{display:flex;justify-content:space-between;gap:16px}.stats{display:flex;gap:48px;margin:24px 0}.stats div{display:flex;flex-direction:column}.stats b{font-size:26px}.stats span{margin-top:4px;color:#778399;font-size:13px}.detail{padding:8px 28px;color:#44506a}.detail p{margin:6px 0 16px;white-space:pre-wrap;line-height:1.7}.detail .trace{padding:10px 12px;background:#f6f8fc;border-radius:8px;color:#52617c;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}.empty{text-align:center;padding:78px;color:#778399}.empty .el-icon{font-size:46px;color:#8aa9e5}.empty h2{margin:14px 0 8px;color:#35415a}.case-title,.case-head,.case-options{display:flex;align-items:center;justify-content:space-between;gap:12px}.case-title{margin:8px 0}.case-card{padding:14px;margin-top:10px;border:1px solid #e7edf7;border-radius:10px;background:#fafcff}.case-head{margin-bottom:10px;color:#52617c}.case-options{margin-top:10px}.case-options .el-select{width:150px}.case-options .el-input{flex:1}@media(max-width:700px){.page header,.controls{align-items:flex-start;gap:14px;flex-direction:column}.stats{gap:20px}.set-select{width:100%}.case-options{align-items:stretch;flex-direction:column}.case-options .el-select{width:100%}}
 </style>

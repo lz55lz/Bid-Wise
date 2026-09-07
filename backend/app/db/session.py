@@ -1,69 +1,58 @@
-from collections.abc import Generator
+"""应用进程级数据库连接池与请求级 AsyncSession。"""
 
-from sqlalchemy import create_engine
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import Session, sessionmaker
+from collections.abc import AsyncIterator
+
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from app.core.config import get_settings
-from app.core.errors import DomainError
+
+_engine: AsyncEngine | None = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
-# -------------------------------------------------------------------
-# Sync engine + sessionmaker (keep existing for non-async code)
-# -------------------------------------------------------------------
-def get_session_factory() -> sessionmaker[Session]:
-    settings = get_settings()
-    if not settings.database_url:
-        raise DomainError("SERVICE_UNAVAILABLE", "数据库未配置", 503)
-    return sessionmaker(
-        bind=create_engine(
-            settings.database_url,
-            pool_pre_ping=True,
-            client_encoding="utf8",
-        ),
-        autoflush=False,
-    )
-
-
-# -------------------------------------------------------------------
-# Async engine + sessionmaker (singleton per process)
-# -------------------------------------------------------------------
-_async_engine = None
-_async_sessionmaker = None
-
-
-def _get_async_engine():
-    global _async_engine
-    if _async_engine is None:
-        settings = get_settings()
-        if not settings.database_url:
-            raise DomainError("SERVICE_UNAVAILABLE", "数据库未配置", 503)
-        async_url = settings.database_url.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
-        _async_engine = create_async_engine(
-            async_url,
+def get_engine() -> AsyncEngine:
+    """按进程惰性创建连接池，禁止在路由、服务或仓储里自行建池。"""
+    global _engine
+    if _engine is None:
+        _engine = create_async_engine(
+            get_settings().database_url,
             pool_pre_ping=True,
             pool_size=10,
             max_overflow=20,
         )
-    return _async_engine
+    return _engine
 
 
-def get_async_session_factory() -> async_sessionmaker[AsyncSession]:
-    global _async_sessionmaker
-    if _async_sessionmaker is None:
-        _async_sessionmaker = async_sessionmaker(
-            bind=_get_async_engine(),
-            class_=AsyncSession,
-            autoflush=False,
-            expire_on_commit=False,
-        )
-    return _async_sessionmaker
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """返回可复用工厂；每个请求从中创建自己的短生命周期 Session。"""
+    global _session_factory
+    if _session_factory is None:
+        _session_factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    return _session_factory
 
 
-def get_db_session() -> Generator[Session, None, None]:
-    session = get_session_factory()()
-    try:
-        yield session
-        session.commit()
-    finally:
-        session.close()
+async def get_db_session() -> AsyncIterator[AsyncSession]:
+    """FastAPI 依赖项：正常请求提交，异常请求回滚并始终关闭 Session。"""
+    # ``get_session_factory`` 返回的是工厂本身；必须再调用一次才得到单请求 Session。
+    # Worker 已使用 ``get_session_factory()()``，HTTP 依赖也必须保持同一生命周期语义。
+    async with get_session_factory()() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def dispose_database_engine() -> None:
+    """应用关闭时释放连接池，避免开发热重载或 Worker 停止时遗留连接。"""
+    global _engine, _session_factory
+    if _engine is not None:
+        await _engine.dispose()
+    _engine = None
+    _session_factory = None

@@ -41,7 +41,11 @@ export const useAuthStore = defineStore('auth', () => {
       setUser(response)
       return response
     } catch {
-      logout()
+      // 当前用户回查失败不调用登出接口：否则在路由或接口配置出错时，
+      // 会把一个仍有效的令牌意外加入服务端撤销列表。
+      token.value = null
+      user.value = null
+      localStorage.removeItem('access_token')
       return null
     }
   }

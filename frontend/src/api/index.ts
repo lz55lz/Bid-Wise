@@ -11,6 +11,7 @@ import type {
   DocumentNode,
   Evidence,
   Requirement,
+  ProjectField,
   Risk,
   EnterpriseMaterial,
   Enterprise,
@@ -31,21 +32,30 @@ import type {
 } from '@/types'
 
 export interface ReadinessStatus {
-  status: 'ok' | string
-  checks: Record<string, boolean>
-  ai_available: boolean
+  status: 'ready' | string
 }
 
 // 健康检查不走 /api/v1，使用独立的只读就绪端点。
 // 生产部署时由反向代理将该路径转发到 API。
 export const systemApi = {
   getReadiness: async (): Promise<ReadinessStatus> => {
-    const response = await fetch('/health/ready', { headers: { Accept: 'application/json' } })
+    const response = await fetch('/readyz', { headers: { Accept: 'application/json' } })
     if (!response.ok) {
       throw new Error(`健康检查失败（HTTP ${response.status}）`)
     }
     return response.json() as Promise<ReadinessStatus>
   },
+}
+
+export interface DashboardSummary {
+  stats: { active_projects: number; pending_risks: number; completed_reports: number; documents: number }
+  projects: Array<Project & { phase: { code: string; label: string } }>
+  tasks: Array<{ id: string; type: 'risk' | 'match' | 'decision'; project_id: string; title: string; description: string; action_text: string }>
+}
+
+export const dashboardApi = {
+  // 响应拦截器已返回 response.data，工作台不应再取第二层 data。
+  summary: () => request.get<DashboardSummary>('/dashboard') as unknown as Promise<DashboardSummary>,
 }
 
 // 认证
@@ -57,7 +67,7 @@ export const authApi = {
     request.post('/auth/logout'),
 
   getCurrentUser: () =>
-    request.get<User>('/me') as unknown as Promise<User>,
+    request.get<User>('/auth/me') as unknown as Promise<User>,
 }
 
 // 企业
@@ -95,6 +105,9 @@ export const projectApi = {
   list: (params?: { status?: string }) =>
     request.get<Project[]>('/projects', { params }) as unknown as Promise<Project[]>,
 
+  listStatusProjections: () =>
+    request.get<Array<{ project_id: string; phase: { code: string; label: string } }>>('/projects/status-projections') as unknown as Promise<Array<{ project_id: string; phase: { code: string; label: string } }>>,
+
   get: (id: string) =>
     request.get<Project>(`/projects/${id}`) as unknown as Promise<Project>,
 
@@ -120,13 +133,13 @@ export const projectApi = {
 
 export const analysisApi = {
   run: (projectId: string) =>
-    request.post<Task>(`/projects/${projectId}/analysis-runs`) as unknown as Promise<Task>,
+    request.post<AnalysisRun>(`/projects/${projectId}/full-analysis-runs`) as unknown as Promise<AnalysisRun>,
 
   list: (projectId: string) =>
-    request.get<AnalysisRun[]>(`/projects/${projectId}/analysis-runs`) as unknown as Promise<AnalysisRun[]>,
+    request.get<AnalysisRun[]>(`/projects/${projectId}/full-analysis-runs`) as unknown as Promise<AnalysisRun[]>,
 
-  get: (runId: string) =>
-    request.get<AnalysisRun>(`/analysis-runs/${runId}`) as unknown as Promise<AnalysisRun>,
+  get: (projectId: string, runId: string) =>
+    request.get<AnalysisRun>(`/projects/${projectId}/full-analysis-runs/${runId}`) as unknown as Promise<AnalysisRun>,
 
 }
 
@@ -140,32 +153,101 @@ export interface DocumentTaskResult {
 
 export const documentApi = {
   list: (projectId: string) =>
-    request.get<BidDocumentCard[]>(`/projects/${projectId}/documents`) as unknown as Promise<BidDocumentCard[]>,
+    (request.get<Array<{
+      id: string
+      logical_name: string
+      created_at: string
+      current_version: { id: string; parse_status: string; progress_percent?: number; progress_message?: string }
+    }>>(`/projects/${projectId}/documents`) as unknown as Promise<Array<{
+      id: string
+      logical_name: string
+      created_at: string
+      current_version: { id: string; parse_status: string; progress_percent?: number; progress_message?: string }
+    }>>).then(items => items.map(item => ({
+      doc_id: item.id,
+      doc_name: item.logical_name,
+      parse_status: item.current_version.parse_status,
+      created_at: item.created_at,
+      current_version_id: item.current_version.id,
+      progress_percent: item.current_version.progress_percent,
+      progress_message: item.current_version.progress_message,
+    }))) as Promise<BidDocumentCard[]>,
 
   // 上传 TENDER 招标文件：后端自动入队 bid_pipeline，返回版本与任务信息
-  upload: (projectId: string, file: File, documentType: 'TENDER' | 'ENTERPRISE') => {
+  upload: async (projectId: string, file: File, _documentType: 'TENDER' | 'ENTERPRISE') => {
     const formData = new FormData()
     formData.append('file', file)
-    formData.append('document_type', documentType)
-    return request.post<DocumentTaskResult>(`/projects/${projectId}/documents`, formData, {
+    // 新架构以项目文档与版本为事实源；文件类型由后续 bid_pipeline 的受控入口决定，
+    // 不能再让浏览器提交可改变后端处理语义的 document_type。
+    formData.append('logical_name', file.name)
+    const document = await request.post<{ id: string; current_version: { id: string; version_no: number } }>(`/projects/${projectId}/documents`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
-    }) as unknown as Promise<DocumentTaskResult>
+    }) as unknown as { id: string; current_version: { id: string; version_no: number } }
+    const task = await (request.post<{ id: string; status: string }>(
+      `/projects/${projectId}/documents/${document.id}/parse`,
+    ) as unknown as Promise<{ id: string; status: string }>)
+    return {
+      document_id: document.id,
+      document_version_id: document.current_version.id,
+      version_no: document.current_version.version_no,
+      task: { id: task.id, status: task.status, task_type: 'PARSE_DOCUMENT' },
+    } as DocumentTaskResult
   },
 
-  get: (id: string) =>
-    request.get<Document>(`/documents/${id}`) as unknown as Promise<Document>,
+  get: (projectId: string, id: string) =>
+    request.get<Document>(`/projects/${projectId}/documents/${id}`) as unknown as Promise<Document>,
 
-  getVersions: (id: string) =>
-    request.get<DocumentVersion[]>(`/documents/${id}/versions`) as unknown as Promise<DocumentVersion[]>,
+  getVersions: (projectId: string, id: string) =>
+    request.get<DocumentVersion[]>(`/projects/${projectId}/documents/${id}/versions`) as unknown as Promise<DocumentVersion[]>,
 
-  getNodes: (id: string, params?: { offset?: number; limit?: number; version_no?: number }) =>
-    request.get<{ document_id: string; document_version_id: string; items: DocumentNode[]; offset: number; limit: number }>(`/documents/${id}/nodes`, { params }) as unknown as Promise<{ document_id: string; document_version_id: string; items: DocumentNode[]; offset: number; limit: number }>,
+  getNodes: (projectId: string, id: string, params?: { offset?: number; limit?: number; version_no?: number }) =>
+    request.get<{ items: DocumentNode[]; total: number; offset: number; limit: number }>(`/projects/${projectId}/documents/${id}/nodes`, { params }) as unknown as Promise<{ items: DocumentNode[]; total: number; offset: number; limit: number }>,
 
-  retry: (id: string) =>
-    request.post(`/documents/${id}/retry`),
+  getTags: (projectId: string, id: string) =>
+    request.get<Array<{ id: string; tag_code: string; value: unknown; confidence: number; review_status: string; source_document_node_id: string | null }>>(`/projects/${projectId}/documents/${id}/tags`) as unknown as Promise<Array<{ id: string; tag_code: string; value: unknown; confidence: number; review_status: string; source_document_node_id: string | null }>>,
 
-  downloadUrl: (id: string) =>
-    request.get<{ url: string }>(`/documents/${id}/download`) as unknown as Promise<{ url: string }>,
+  retry: (projectId: string, id: string) =>
+    request.post(`/projects/${projectId}/documents/${id}/parse`),
+
+  download: async (projectId: string, id: string) => {
+    const token = localStorage.getItem('access_token')
+    const response = await fetch(`/api/v1/projects/${projectId}/documents/${id}/download`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!response.ok) throw new Error(`下载失败（HTTP ${response.status}）`)
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener')
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  },
+}
+
+export interface TenderPipelineStage {
+  stage_name: string
+  status: string
+  output_summary: Record<string, any> | null
+  error_message: string | null
+}
+
+export interface TenderPipelineRun {
+  id: string
+  document_version_id: string
+  status: 'QUEUED' | 'RUNNING' | 'WAITING_HUMAN_REVIEW' | 'RESUME_QUEUED' | 'SUCCEEDED' | 'CANCELLED' | 'FAILED'
+  pending_review: Record<string, any> | null
+  error_code: string | null
+  error_message: string | null
+  stages: TenderPipelineStage[]
+}
+
+export const tenderPipelineApi = {
+  list: (projectId: string) =>
+    request.get<TenderPipelineRun[]>(`/projects/${projectId}/tender-pipeline`) as unknown as Promise<TenderPipelineRun[]>,
+  submit: (projectId: string, versionId: string) =>
+    request.post<TenderPipelineRun>(`/projects/${projectId}/tender-pipeline/versions/${versionId}`) as unknown as Promise<TenderPipelineRun>,
+  review: (projectId: string, runId: string, data: { decision: 'approved' | 'rejected'; approved_tag_codes?: string[]; reviewed_tags: Record<string, Record<string, any>> }) =>
+    request.post<TenderPipelineRun>(`/projects/${projectId}/tender-pipeline/${runId}/review`, data) as unknown as Promise<TenderPipelineRun>,
+  saveReviewDraft: (projectId: string, runId: string, drafts: Record<string, string>, notes: Record<string, string>) =>
+    request.patch<TenderPipelineRun>(`/projects/${projectId}/tender-pipeline/${runId}/review-draft`, { drafts, notes }) as unknown as Promise<TenderPipelineRun>,
 }
 
 // Evidence
@@ -178,6 +260,9 @@ export const evidenceApi = {
 export const requirementApi = {
   list: (projectId: string) =>
     request.get<Requirement[]>(`/projects/${projectId}/requirements`) as unknown as Promise<Requirement[]>,
+
+  listFields: (projectId: string) =>
+    request.get<ProjectField[]>(`/projects/${projectId}/requirements/fields`) as unknown as Promise<ProjectField[]>,
 
   review: (projectId: string, id: string, data: { review_status: string; review_note?: string }) =>
     request.patch<Requirement>(`/projects/${projectId}/requirements/${id}`, data) as unknown as Promise<Requirement>,
@@ -207,21 +292,11 @@ export const materialApi = {
     request.post<EnterpriseMaterial>('/enterprise-materials', data) as unknown as Promise<EnterpriseMaterial>,
 
   update: (id: string, data: Partial<EnterpriseMaterial>) =>
-    request.patch<EnterpriseMaterial>(`/enterprise-materials/${id}`, data) as unknown as Promise<EnterpriseMaterial>,
+    request.put<EnterpriseMaterial>(`/enterprise-materials/${id}`, data) as unknown as Promise<EnterpriseMaterial>,
 
   delete: (id: string) =>
-    request.delete(`/enterprise-materials/${id}`),
+    request.post<EnterpriseMaterial>(`/enterprise-materials/${id}/archive`) as unknown as Promise<EnterpriseMaterial>,
 
-  uploadDocument: (materialId: string, file: File) => {
-    const formData = new FormData()
-    formData.append('file', file)
-    return request.post(`/enterprise-materials/${materialId}/documents`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
-  },
-
-  attachDocument: (materialId: string, data: { document_id: string; document_version_id: string }) =>
-    request.post<EnterpriseMaterial>(`/enterprise-materials/${materialId}/documents/attach`, data) as unknown as Promise<EnterpriseMaterial>,
 }
 
 // 匹配
@@ -247,20 +322,20 @@ export const decisionApi = {
 
 // 报告
 export const reportApi = {
-  generate: (projectId: string) =>
-    request.post<Task>(`/projects/${projectId}/reports`) as unknown as Promise<Task>,
+  generate: (projectId: string, reportType: 'SIMPLE' | 'FULL' = 'SIMPLE') =>
+    request.post<Report>(`/projects/${projectId}/reports`, null, { params: { report_type: reportType } }) as unknown as Promise<Report>,
 
   // 后端返回最新一份报告，没有则为 null
   latest: (projectId: string) =>
-    request.get<Report | null>(`/projects/${projectId}/reports`) as unknown as Promise<Report | null>,
+    request.get<Report | null>(`/projects/${projectId}/reports/latest`) as unknown as Promise<Report | null>,
 
-  get: (id: string) =>
-    request.get<Report>(`/reports/${id}`) as unknown as Promise<Report>,
+  get: (projectId: string, id: string) =>
+    request.get<Report>(`/projects/${projectId}/reports/${id}`) as unknown as Promise<Report>,
 
   // 后端直接流式返回文件，需要带 token 走 blob 下载
-  download: async (id: string, format: 'docx' | 'pdf' | 'md') => {
+  download: async (projectId: string, id: string, format: 'docx' | 'pdf' | 'md') => {
     const token = localStorage.getItem('access_token')
-    const res = await fetch(`/api/v1/reports/${id}/download?format=${format}`, {
+    const res = await fetch(`/api/v1/projects/${projectId}/reports/${id}/download?format=${format}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (!res.ok) {
@@ -304,39 +379,38 @@ export const auditApi = {
 
 // 问答
 export const chatApi = {
-  askStream: (projectId: string | undefined, question: string, sessionId?: string): Promise<ReadableStream> => {
+  getGlobalSessions: () => request.get<any[]>('/conversations') as unknown as Promise<any[]>,
+  createGlobalSession: (data: { title?: string } = {}) => request.post<any>('/conversations', data) as unknown as Promise<any>,
+  getGlobalMessages: (id: string) => request.get<any[]>(`/conversations/${id}/messages`) as unknown as Promise<any[]>,
+  deleteGlobalSession: (id: string) => request.delete(`/conversations/${id}`) as unknown as Promise<void>,
+  askStream: (projectId: string, question: string, conversationId: string): Promise<Response> => {
     const token = localStorage.getItem('access_token')
-    return fetch('/api/v1/chat/stream', {
+    return fetch(`/api/v1/projects/${projectId}/conversations/${conversationId}/messages/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
       },
-      body: JSON.stringify({ question, project_id: projectId, session_id: sessionId }),
-    }).then(res => res.body!)
+      body: JSON.stringify({ content: question }),
+    })
   },
 
-  // 会话 CRUD
-  getSessions: (page = 1, pageSize = 20) =>
-    request.get<{ items: any[]; total: number; page: number; page_size: number }>('/sessions', { params: { page, page_size: pageSize } }) as unknown as Promise<{ items: any[]; total: number; page: number; page_size: number }>,
+  // 项目私有会话 CRUD；项目范围始终由 URL 决定。
+  getSessions: (projectId: string) => request.get<any[]>(`/projects/${projectId}/conversations`) as unknown as Promise<any[]>,
 
-  createSession: (data: { title?: string; project_id?: string } = {}) =>
-    request.post<any>('/sessions', data) as unknown as Promise<any>,
+  createSession: (projectId: string, data: { title?: string } = {}) => request.post<any>(`/projects/${projectId}/conversations`, data) as unknown as Promise<any>,
 
-  getSession: (id: string) =>
-    request.get<any>(`/sessions/${id}`) as unknown as Promise<any>,
+  getSession: (_projectId: string, _id: string) => Promise.reject(new Error('会话详情请通过列表读取')),
 
-  updateSession: (id: string, data: { title: string }) =>
-    request.put<any>(`/sessions/${id}`, data) as unknown as Promise<any>,
+  updateSession: (projectId: string, id: string, data: { title: string }) => request.patch<any>(`/projects/${projectId}/conversations/${id}`, data) as unknown as Promise<any>,
 
-  deleteSession: (id: string) =>
-    request.delete(`/sessions/${id}`) as unknown as Promise<void>,
+  deleteSession: (projectId: string, id: string) => request.delete(`/projects/${projectId}/conversations/${id}`) as unknown as Promise<void>,
 
-  getMessages: (id: string, limit = 50) =>
-    request.get<{ items: any[]; total: number }>(`/sessions/${id}/messages`, { params: { limit } }) as unknown as Promise<{ items: any[]; total: number }>,
+  getMessages: (projectId: string, id: string) => request.get<any[]>(`/projects/${projectId}/conversations/${id}/messages`) as unknown as Promise<any[]>,
 
-  createMessage: (sessionId: string, data: { role: string; content: string; knowledge_references?: any; is_fallback?: boolean }) =>
-    request.post<any>(`/sessions/${sessionId}/messages`, data) as unknown as Promise<any>,
+  listMemories: () => request.get<any[]>('/memories') as unknown as Promise<any[]>,
+  createMemory: (data: { content: string; project_id?: string }) => request.post<any>('/memories', data) as unknown as Promise<any>,
+  deleteMemory: (id: string) => request.delete(`/memories/${id}`) as unknown as Promise<void>,
 }
 
 // 知识库
@@ -352,10 +426,10 @@ export const knowledgeApi = {
     request.post<KnowledgeEntry>(`/knowledge-entries/${entryId}/versions`, data) as unknown as Promise<KnowledgeEntry>,
 
   publish: (versionId: string) =>
-    request.post<KnowledgeEntry>(`/knowledge-versions/${versionId}/publish`),
+    request.post<KnowledgeEntry>(`/knowledge-entries/versions/${versionId}/publish`),
 
   unpublish: (versionId: string) =>
-    request.post<KnowledgeEntry>(`/knowledge-versions/${versionId}/unpublish`),
+    request.post<KnowledgeEntry>(`/knowledge-entries/versions/${versionId}/unpublish`),
 
   delete: (entryId: string) =>
     request.delete(`/knowledge-entries/${entryId}`),
@@ -383,17 +457,8 @@ export const knowledgeApi = {
     })
   },
 
-  askStream: (question: string, projectId?: string, sessionId?: string): Promise<ReadableStream> => {
-    const token = localStorage.getItem('access_token')
-    return fetch('/api/v1/chat/stream', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({ question, project_id: projectId, session_id: sessionId }),
-    }).then(res => res.body!)
-  },
+  retryDocumentParse: (entryId: string, documentId: string) =>
+    request.post(`/knowledge-entries/${entryId}/documents/${documentId}/parse`),
 }
 
 export interface EvaluationCaseInput {
@@ -423,6 +488,8 @@ export interface EvaluationRunResult {
   skipped: number
   recall_at_5: number
   elapsed_ms: number
+  mode: 'controlled' | 'agent'
+  metrics?: { tool_calls: number; tool_success_rate: number; evidence_backed_cases: number; policy_enforced_cases: number }
   results: Array<{
     question: string
     scope: string
@@ -432,10 +499,21 @@ export interface EvaluationRunResult {
     error?: string
     expected?: string[]
     matched_excerpt?: string
+    agent_trace?: Array<{
+      tool: string
+      status: string
+      elapsed_ms: number
+      evidence_count?: number
+      detail?: string | null
+    }>
   }>
 }
 
 export const evaluationApi = {
+  listRuns: () => request.get<Array<{ id: string; status: string; result?: EvaluationRunResult | null; error_message?: string | null }>>('/evaluations/runs') as unknown as Promise<Array<{ id: string; status: string; result?: EvaluationRunResult | null; error_message?: string | null }>>,
+  createRun: (projectId: string | undefined, setId: string) =>
+    request.post<{ id: string; status: string }>('/evaluations/runs', { set_id: setId, ...(projectId ? { project_id: projectId } : {}) }) as unknown as Promise<{ id: string; status: string }>,
+  getRun: (id: string) => request.get<{ id: string; status: string; result?: EvaluationRunResult | null; error_message?: string | null }>(`/evaluations/runs/${id}`) as unknown as Promise<{ id: string; status: string; result?: EvaluationRunResult | null; error_message?: string | null }>,
   listSets: () =>
     request.get<EvaluationSet[]>('/evaluations/sets') as unknown as Promise<EvaluationSet[]>,
 
@@ -451,10 +529,6 @@ export const evaluationApi = {
   deleteSet: (id: string) =>
     request.delete(`/evaluations/sets/${id}`) as unknown as Promise<void>,
 
-  runRag: (projectId?: string, setId?: string) =>
-    request.post<EvaluationRunResult>('/evaluations/rag', null, {
-      params: { ...(projectId ? { project_id: projectId } : {}), ...(setId ? { set_id: setId } : {}) },
-    }) as unknown as Promise<EvaluationRunResult>,
 }
 
 // Agent Run（投标分析）

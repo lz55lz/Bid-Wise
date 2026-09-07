@@ -81,7 +81,14 @@
                   :show-info="false"
                   :stroke-width="4"
                 />
-                <span class="parse-label">{{ getParseText(row.source_parse_status) }}</span>
+                <span class="parse-label">{{ row.source_parse_message || getParseText(row.source_parse_status) }}</span>
+                <el-tooltip v-if="getFilteredCount(row as KnowledgeEntry) > 0" content="目录和空白节点已在索引前过滤" placement="top">
+                  <span class="cleaning-summary">已清洗 {{ getFilteredCount(row as KnowledgeEntry) }} 项</span>
+                </el-tooltip>
+                <el-tooltip v-if="row.source_parse_status === 'FAILED' && row.source_parse_error" :content="row.source_parse_error" placement="top">
+                  <span class="parse-error">解析失败，请重试</span>
+                </el-tooltip>
+                <span v-else-if="row.source_parse_status === 'FAILED'" class="parse-error">解析失败，请重试</span>
               </div>
             </div>
           </template>
@@ -102,6 +109,11 @@
                 text size="small" type="warning"
                 @click="handleUnpublish(row as KnowledgeEntry)"
               >下架</el-button>
+              <el-button
+                v-if="row.source_parse_status === 'FAILED' && row.source_document_version_id"
+                text size="small" type="warning"
+                @click="handleRetryParse(row as KnowledgeEntry)"
+              >重新解析</el-button>
               <el-button text size="small" type="danger" @click="handleDelete(row as KnowledgeEntry)">删除</el-button>
             </div>
           </template>
@@ -208,7 +220,7 @@
             ref="uploadRef"
             :auto-upload="false"
             :limit="1"
-            accept=".pdf,.docx,.xlsx,.pptx,.jpg,.jpeg,.png"
+            accept=".pdf,.docx,.xlsx,.pptx"
             drag
             :on-change="(f: any) => (importForm.file = f.raw)"
             :on-remove="() => (importForm.file = null)"
@@ -216,7 +228,7 @@
             <el-icon class="upload-drag-icon"><UploadFilled /></el-icon>
             <span>将文件拖到此处，或<span class="upload-link">点击上传</span></span>
             <template #tip>
-              <div class="upload-tip">支持 PDF、DOCX、XLSX、PPTX、JPG、PNG；解析完成后请审核并发布</div>
+              <div class="upload-tip">支持 PDF、DOCX、XLSX、PPTX；解析完成后请审核并发布</div>
             </template>
           </el-upload>
         </el-form-item>
@@ -377,6 +389,8 @@ const fetchEntries = async () => {
   loading.value = true
   try {
     entries.value = await knowledgeApi.list(searchKeyword.value || undefined)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '知识库列表加载失败，请稍后重试')
   } finally {
     loading.value = false
   }
@@ -477,7 +491,8 @@ const handleImportSubmit = async () => {
     })
     ElMessage.success('文档已上传，正在解析，稍后请刷新列表')
     showImportDialog.value = false
-    fetchEntries()
+    await fetchEntries()
+    startAutoRefresh()
   } catch (e: any) {
     if (e?.message) ElMessage.error(e.message)
   } finally {
@@ -507,6 +522,18 @@ const handleUnpublish = async (entry: KnowledgeEntry) => {
     fetchEntries()
   } catch (e: any) {
     ElMessage.error(e?.message || '下架失败')
+  }
+}
+
+const handleRetryParse = async (entry: KnowledgeEntry) => {
+  if (!entry.source_document_version_id) return
+  try {
+    await knowledgeApi.retryDocumentParse(entry.entry_id, entry.source_document_version_id)
+    ElMessage.success('已重新提交解析任务')
+    await fetchEntries()
+    startAutoRefresh()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '重新提交解析失败')
   }
 }
 
@@ -543,6 +570,7 @@ const PARSE_PROGRESS: Record<string, number> = {
 }
 
 const getParseProgress = (row: KnowledgeEntry) => {
+  if (typeof row.source_parse_progress === 'number') return row.source_parse_progress
   if (!row.source_parse_status) return 0
   return PARSE_PROGRESS[row.source_parse_status] ?? 0
 }
@@ -565,6 +593,12 @@ const getParseText = (parseStatus?: string) => ({
   SUCCESS: '完成',
   FAILED: '失败',
 }[parseStatus || ''] || parseStatus || '')
+
+const getFilteredCount = (entry: KnowledgeEntry) => {
+  const summary = entry.source_cleaning_summary
+  if (!summary) return 0
+  return Number(summary.filtered_contents_entries || 0) + Number(summary.filtered_empty_nodes || 0)
+}
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 

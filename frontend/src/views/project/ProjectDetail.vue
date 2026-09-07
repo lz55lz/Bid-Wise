@@ -18,7 +18,7 @@
       </div>
       <div class="header-actions">
         <el-button v-if="project?.status !== 'ARCHIVED'" :icon="Upload" @click="showUploadDialog = true">
-          上传文档
+          项目文档或附件上传
         </el-button>
         <el-button
           v-if="project?.status !== 'ARCHIVED'"
@@ -87,6 +87,47 @@
       <div v-else class="empty-state-small">完成招标文件解析后，即可发起统一分析。</div>
     </section>
 
+    <section v-if="waitingTenderReview" class="analysis-run-section human-review-panel">
+      <div class="section-heading">
+        <div>
+          <h2 class="section-title">招标信息审批</h2>
+          <p>确认系统提取结果，或先修改、补充信息再审批。审批后的结果将用于后续分析。</p>
+        </div>
+        <div class="analysis-actions">
+          <el-button :loading="restartingTenderExtraction" @click="restartTenderExtraction">按新版重新提取</el-button>
+          <el-button @click="openTenderReview">修改或补充</el-button>
+          <el-button type="primary" :loading="tenderReviewSubmitting" @click="approveTenderExtraction">直接审批</el-button>
+        </div>
+      </div>
+      <el-alert
+        type="warning"
+        :title="tenderReviewAlertTitle"
+        :description="tenderReviewAlertDescription"
+        :closable="false"
+      />
+    </section>
+
+    <section v-else-if="tenderPipelineCanRestart" class="analysis-run-section">
+      <div class="section-heading">
+        <div>
+          <h2 class="section-title">招标字段提取</h2>
+          <p>{{ tenderPipelineProducedNoRequirements ? '上一轮未生成可用于匹配的资格需求。可重新提取，不会重复解析文档。' : '上一轮结果未采用。可按新版报告字段范围重新提取，不会重复解析文档。' }}</p>
+        </div>
+        <el-button type="primary" :loading="restartingTenderExtraction" @click="restartTenderExtraction">重新提取</el-button>
+      </div>
+    </section>
+
+    <section v-if="tenderPipelineFailure" class="analysis-run-section">
+      <div class="section-heading">
+        <div>
+          <h2 class="section-title">招标字段提取失败</h2>
+          <p>文档已经解析完成，但尚未生成 Requirement；重试只重新运行字段提取，不会重复解析文件。</p>
+        </div>
+        <el-button type="primary" :loading="retryingTenderPipeline" @click="retryTenderPipeline">重新提取</el-button>
+      </div>
+      <el-alert type="error" :title="tenderPipelineFailure.error_message || '字段提取失败，请重新提取'" :closable="false" />
+    </section>
+
     <!-- 业务进度：技术细节仅保留在任务日志，避免与人工复核状态混淆 -->
     <div class="stages-section">
       <h2 class="section-title">投标准备进度</h2>
@@ -116,6 +157,14 @@
           <div v-if="idx < businessStages.length - 1" class="stage-connector" />
         </div>
       </div>
+      <el-alert
+        v-if="tenderPipelineProgress"
+        class="tender-progress-alert"
+        type="info"
+        :title="tenderPipelineProgress.title"
+        :description="tenderPipelineProgress.description"
+        :closable="false"
+      />
       <div v-if="canStartAnalysis" class="next-step-action">
         <div>
           <strong>关键需求已确认</strong>
@@ -129,9 +178,9 @@
     <el-tabs v-model="activeTab" class="project-tabs">
       <el-tab-pane label="文档" name="documents">
         <div class="tab-header">
-          <h3>项目文档</h3>
+          <h3>项目文档与附件</h3>
           <el-button v-if="project?.status !== 'ARCHIVED'" type="primary" size="small" @click="showUploadDialog = true">
-            上传文档
+            项目文档或附件上传
           </el-button>
         </div>
 
@@ -148,10 +197,25 @@
                 </span>
                 <span v-if="doc.created_at" class="card-date">{{ formatDate(doc.created_at) }}</span>
               </div>
+              <div v-if="doc.progress_percent != null && doc.parse_status !== 'READY'" class="doc-parse-progress">
+                <el-progress :percentage="doc.progress_percent" :show-text="false" :stroke-width="4" />
+                <span>{{ doc.progress_message || getDocStatusText(doc.parse_status) }}</span>
+              </div>
             </div>
-            <el-button size="small" class="card-action" @click.stop="router.push(`/projects/${projectId}/documents/${doc.doc_id}`)">
-              查看文档
-            </el-button>
+            <div class="card-actions">
+              <el-button
+                v-if="doc.parse_status === 'FAILED' && project?.status !== 'ARCHIVED'"
+                size="small"
+                type="warning"
+                :loading="retryingDocumentId === doc.doc_id"
+                @click.stop="retryDocumentParse(doc)"
+              >
+                重新解析
+              </el-button>
+              <el-button size="small" class="card-action" @click.stop="router.push(`/projects/${projectId}/documents/${doc.doc_id}`)">
+                查看文档
+              </el-button>
+            </div>
           </div>
         </div>
 
@@ -164,17 +228,19 @@
         <div class="tab-header">
           <div>
             <h3>需求复核工作台</h3>
-            <p class="tab-tip">仅处理高价值不确定性；可先查看招标原文，再确认是否进入企业材料匹配。</p>
+            <p class="tab-tip">仅展示尚未确认的需求候选；字段复核已确认的资格要求会直接同步到企业材料匹配。</p>
           </div>
           <el-button size="small" @click="loadRequirements">刷新</el-button>
         </div>
         <template v-if="requirements.length">
         <div class="review-metrics">
-          <span>优先复核 <strong>{{ priorityRequirements.length }}</strong></span>
-          <span>延后复核 <strong>{{ deferredRequirements.length }}</strong></span>
-          <span>已确认 <strong>{{ confirmedRequirements.length }}</strong></span>
+          <span>待人工确认 <strong>{{ priorityRequirements.length }}</strong></span>
+          <span>已确认字段 <strong>{{ confirmedProjectFields.length }}</strong></span>
+          <span>已同步匹配 <strong>{{ syncedRequirements.length }}</strong></span>
+          <span>其他已确认 <strong>{{ manuallyConfirmedRequirements.length }}</strong></span>
         </div>
-        <div class="review-queue-title"><div><h4>优先复核队列</h4><small>按强制信号、类别、置信度与证据完整性排序</small></div><div><el-button size="small" type="success" :disabled="!selectedPriorityRequirements.length" @click="bulkReview('CONFIRMED')">批量确认</el-button><el-button size="small" :disabled="!selectedPriorityRequirements.length" @click="bulkReview('REJECTED')">批量驳回</el-button></div></div>
+        <template v-if="priorityRequirements.length">
+        <div class="review-queue-title"><div><h4>待人工确认</h4><small>按强制性、类别、置信度和证据完整性排序</small></div><div><el-button size="small" type="success" :disabled="!selectedPriorityRequirements.length" @click="bulkReview('CONFIRMED')">批量确认</el-button><el-button size="small" :disabled="!selectedPriorityRequirements.length" @click="bulkReview('REJECTED')">批量驳回</el-button></div></div>
         <el-table :data="priorityRequirements" size="small" max-height="400" @selection-change="selectedPriorityRequirements = $event">
           <el-table-column type="selection" width="42" />
           <el-table-column prop="title" label="需求" min-width="240" show-overflow-tooltip />
@@ -192,15 +258,17 @@
             </template>
           </el-table-column>
         </el-table>
-        <div v-if="deferredRequirements.length" class="review-queue-title deferred-queue"><div><h4>延后复核（{{ deferredRequirements.length }}）</h4><small>有效候选已保留，关键队列完成后再处理。</small></div></div>
-        <el-table v-if="deferredRequirements.length" :data="deferredRequirements" size="small" max-height="250">
+        </template>
+        <el-alert v-else type="success" title="当前没有待人工确认的需求候选" description="下方“已同步匹配”数量来自已经完成的招标字段复核，可直接用于企业材料匹配。" :closable="false" />
+        <div v-if="confirmedRequirements.length" class="review-queue-title confirmed-queue"><div><h4>已确认并可用于匹配（{{ confirmedRequirements.length }}）</h4><small>这些不是待复核队列，不需要再次确认。</small></div></div>
+        <el-table v-if="confirmedRequirements.length" :data="confirmedRequirements" size="small" max-height="250">
           <el-table-column prop="title" label="需求" min-width="240" show-overflow-tooltip />
           <el-table-column prop="category" label="类别" width="120" />
-          <el-table-column label="置信度 / 证据" width="130"><template #default="{ row }">{{ formatConfidence(row.confidence) }} / {{ row.evidence_ids.length }} 条</template></el-table-column>
-          <el-table-column label="操作" width="205"><template #default="{ row }"><el-button size="small" text :disabled="!row.evidence_ids.length" @click="openRequirementEvidence(row)">原文依据</el-button><el-button size="small" @click="promoteRequirement(row)">提升优先级</el-button></template></el-table-column>
+          <el-table-column label="来源" width="140"><template #default="{ row }">{{ row.extraction_source === 'PIPELINE_HUMAN' ? '字段复核同步' : '人工确认' }}</template></el-table-column>
+          <el-table-column label="原文" width="100"><template #default="{ row }"><el-button size="small" text :disabled="!row.evidence_ids.length" @click="openRequirementEvidence(row)">查看依据</el-button></template></el-table-column>
         </el-table>
         </template>
-        <div v-else class="empty-state-small">文档解析完成后将自动生成待复核的 Requirement。</div>
+        <div v-else class="empty-state-small">{{ requirementsEmptyState }}</div>
       </el-tab-pane>
 
       <el-tab-pane label="报告" name="reports">
@@ -208,7 +276,7 @@
           <div class="card report-card">
             <div>
               <div class="card-title">{{ project?.name }}</div>
-              <div class="card-date">v{{ latestReport.version_no }} · {{ latestReport.status }}</div>
+              <div class="card-date">{{ latestReport.status }}</div>
             </div>
             <el-button size="small" type="primary" class="card-action" :disabled="latestReport.status !== 'READY'" @click="openReportPreview">查看报告</el-button>
           </div>
@@ -222,20 +290,57 @@
     </el-tabs>
 
     <el-dialog v-model="showSnapshotDialog" title="分析快照" width="760px" destroy-on-close>
-      <template v-if="selectedAnalysisRun?.snapshot">
+      <template v-if="selectedAnalysisRun">
         <el-descriptions :column="1" border>
-          <el-descriptions-item label="招标文件版本">{{ selectedAnalysisRun.snapshot.tender_version_ids.length }} 份</el-descriptions-item>
-          <el-descriptions-item label="企业材料">{{ selectedAnalysisRun.snapshot.enterprise_material_ids.length }} 项</el-descriptions-item>
-          <el-descriptions-item label="启用规则版本">{{ selectedAnalysisRun.snapshot.rule_version_ids.length }} 条</el-descriptions-item>
+          <el-descriptions-item label="运行状态">{{ analysisStatusText(selectedAnalysisRun.status) }}</el-descriptions-item>
+          <el-descriptions-item label="当前阶段">{{ analysisStageText(selectedAnalysisRun.current_stage) }}</el-descriptions-item>
+          <el-descriptions-item label="关联报告">{{ selectedAnalysisRun.report_id || '尚未生成' }}</el-descriptions-item>
         </el-descriptions>
         <el-timeline class="snapshot-timeline">
-          <el-timeline-item v-for="(output, stage) in selectedAnalysisRun.snapshot.stage_outputs" :key="stage" :type="output.status === 'SUCCEEDED' ? 'success' : output.status === 'FAILED' ? 'danger' : 'primary'">
+          <el-timeline-item v-for="(output, stage) in selectedAnalysisRun.stage_outputs" :key="stage" :type="output.status === 'SUCCEEDED' ? 'success' : output.status === 'FAILED' ? 'danger' : 'primary'">
             <strong>{{ analysisStageText(stage) }}</strong>
             <span class="snapshot-output">{{ formatStageOutput(output) }}</span>
           </el-timeline-item>
         </el-timeline>
       </template>
       <el-empty v-else description="快照加载中" />
+    </el-dialog>
+
+    <el-dialog v-model="showTenderReviewDialog" title="修改或补充后审批" width="min(1240px, 96vw)" top="3vh" destroy-on-close>
+      <p class="review-desc">可直接修改系统提取值或补充缺失信息；留空的字段不会写入最终结果。原始提取值和人工修订值会分别保留。</p>
+      <el-form class="tender-review-form" label-position="top">
+        <article v-for="row in tenderReviewRows" :key="row.code" class="tender-review-field">
+          <el-form-item>
+            <template #label>
+              <span class="tender-review-field-label">{{ row.name }}<small>{{ row.code }}</small></span>
+            </template>
+            <el-alert v-if="row.issueText" class="tender-review-field-issue" type="warning" :title="row.issueText" :closable="false" />
+            <div class="tender-review-field-meta"><el-tag size="small" type="warning">{{ tenderReviewStatus(row) }}</el-tag><span>原文第 {{ row.source_page_number || '—' }} 页</span></div>
+            <label class="tender-review-input-label">最终值</label>
+            <el-input
+              v-model="tenderReviewDrafts[row.code]"
+              :type="row.data_type === 'json' || row.is_multi_value ? 'textarea' : 'text'"
+              :rows="row.data_type === 'json' || row.is_multi_value ? 5 : 2"
+              :placeholder="tenderReviewInputHint(row)"
+            />
+            <label class="tender-review-input-label">修改说明 <span>（可选）</span></label>
+            <el-input v-model="tenderReviewNotes[row.code]" :rows="2" type="textarea" placeholder="例如：核对招标文件第 12 页；附件一《资格条件表》第 3 行" />
+            <details class="tender-review-evidence">
+              <summary>查看模型提取值与原文依据</summary>
+              <pre v-if="hasTenderTagValue(row.value)">{{ displayTenderTagValue(row.value) }}</pre>
+              <p v-else class="tender-review-empty">模型未提取到内容</p>
+              <blockquote v-if="row.source_text">{{ row.source_text }}</blockquote>
+              <p v-else class="tender-review-empty">没有可展示的原文片段</p>
+            </details>
+          </el-form-item>
+        </article>
+      </el-form>
+      <template #footer>
+        <el-button @click="showTenderReviewDialog = false">取消</el-button>
+        <el-button :loading="tenderReviewSubmitting" @click="submitTenderReview('rejected')">拒绝本轮结果</el-button>
+        <el-button :loading="tenderReviewDraftSaving" @click="saveTenderReviewDraft">暂存表单</el-button>
+        <el-button type="primary" :loading="tenderReviewSubmitting" @click="submitTenderReview('approved')">审批通过</el-button>
+      </template>
     </el-dialog>
 
     <el-dialog v-model="showEvidenceDialog" title="需求原文依据" width="760px" destroy-on-close>
@@ -248,7 +353,13 @@
           <el-empty v-if="!evidenceLoading && !selectedEvidence.length" description="未找到可展示的原文依据" />
           <article v-for="evidence in selectedEvidence" :key="evidence.id" class="evidence-card">
             <div class="evidence-meta">原文依据 · 第 {{ evidence.page_number || '-' }} 页</div>
-            <blockquote>{{ evidence.quoted_text || '原文节选不可用' }}</blockquote>
+            <div v-if="evidenceTable(evidence)" class="evidence-table-wrap">
+              <table class="evidence-table">
+                <thead><tr><th v-for="(header, index) in evidenceTable(evidence)?.headers" :key="index">{{ header }}</th></tr></thead>
+                <tbody><tr v-for="(row, rowIndex) in evidenceTable(evidence)?.rows" :key="rowIndex"><td v-for="(cell, columnIndex) in row" :key="columnIndex">{{ cell }}</td></tr></tbody>
+              </table>
+            </div>
+            <blockquote v-else>{{ evidence.quoted_text || '原文节选不可用' }}</blockquote>
           </article>
         </div>
       </template>
@@ -257,25 +368,25 @@
     <el-dialog v-model="showReportPreview" title="投标分析报告" width="min(1080px, 94vw)" top="4vh" destroy-on-close>
       <template #header>
         <div class="report-preview-header">
-          <div><strong>投标分析报告</strong><span v-if="previewReport">v{{ previewReport.version_no }} · {{ formatDate(previewReport.generated_at || previewReport.created_at) }}</span></div>
+          <div><strong>投标分析报告</strong><span v-if="previewReport">{{ formatDate(previewReport.completed_at || previewReport.created_at) }}</span></div>
           <div v-if="previewReport"><el-button size="small" @click="downloadReport('md')">下载 MD</el-button><el-button size="small" type="primary" @click="downloadReport('pdf')">下载 PDF</el-button></div>
         </div>
       </template>
       <div v-loading="reportPreviewLoading" class="report-preview">
         <el-empty v-if="!reportPreviewLoading && !(previewReport?.sections?.length ?? 0)" description="报告内容暂不可用" />
-        <section v-for="section in (previewReport?.sections || [])" :key="section.section_code" class="report-preview-section">
-          <div class="report-preview-section-title"><h3>{{ reportSectionName(section.section_code) }}</h3><span>{{ section.evidence_ids.length }} 条原文依据</span></div>
-          <MarkdownRenderer :content="section.content_markdown" />
+        <section v-for="section in (previewReport?.sections || [])" :key="section.title" class="report-preview-section">
+          <div class="report-preview-section-title"><h3>{{ section.title }}</h3></div>
+          <MarkdownRenderer :content="section.content_markdown" :citations="previewReport?.citations || []" />
         </section>
       </div>
     </el-dialog>
 
-    <!-- 上传文档对话框 -->
-    <el-dialog v-model="showUploadDialog" title="上传文档" width="500px">
+    <!-- 项目文档或附件上传对话框 -->
+    <el-dialog v-model="showUploadDialog" title="项目文档或附件上传" width="500px">
       <el-form ref="uploadFormRef" :model="uploadForm" label-width="100px">
-        <el-form-item label="文档类型" prop="document_type">
+        <el-form-item label="文件范围" prop="document_type">
           <el-select v-model="uploadForm.document_type" style="width: 100%">
-            <el-option label="招标文件" value="TENDER" />
+            <el-option label="招标文件或其附件" value="TENDER" />
           </el-select>
         </el-form-item>
 
@@ -290,7 +401,7 @@
             <el-icon class="upload-icon"><UploadFilled /></el-icon>
             <span>将文件拖到此处，或<span class="upload-link">点击上传</span></span>
             <template #tip>
-              <div class="upload-tip">支持 PDF、DOCX、XLSX、PPTX、JPG、PNG 格式，单文件不超过 50MB</div>
+              <div class="upload-tip">可上传招标文件、补充附件、附表或澄清文件。支持 PDF、DOCX、XLSX、PPTX、JPG、PNG，单文件不超过 50MB。</div>
             </template>
           </el-upload>
         </el-form-item>
@@ -309,7 +420,7 @@
 import { computed, ref, reactive, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useProjectStore } from '@/stores'
-import { analysisApi, documentApi, evidenceApi, reportApi, requirementApi } from '@/api'
+import { analysisApi, documentApi, evidenceApi, reportApi, requirementApi, tenderPipelineApi, type TenderPipelineRun } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowLeft, Upload, MoreFilled, Check, Close, Loading, Document, UploadFilled,
@@ -317,7 +428,7 @@ import {
 } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import type { FormInstance } from 'element-plus'
-import type { AnalysisRun, BidDocumentCard, Project, Evidence, Report, Requirement } from '@/types'
+import type { AnalysisRun, BidDocumentCard, Project, Evidence, Report, Requirement, ProjectField } from '@/types'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 
 const router = useRouter()
@@ -333,15 +444,30 @@ const analysisSubmitting = ref(false)
 const showSnapshotDialog = ref(false)
 const analysisPollTimer = ref<number | null>(null)
 const latestAnalysisRun = computed(() => analysisRuns.value[0] ?? null)
-const analysisIsActive = computed(() => ['QUEUED', 'RUNNING'].includes(latestAnalysisRun.value?.status || ''))
+// 报告排队/生成仍属于同一次完整分析，不能在此时允许用户再次提交并让后端返回冲突。
+const analysisIsActive = computed(() => ['QUEUED', 'RUNNING', 'REPORT_QUEUED'].includes(latestAnalysisRun.value?.status || ''))
 const analysisStages = computed(() => buildAnalysisStages(latestAnalysisRun.value))
 // 文档列表
 const bidDocs = ref<BidDocumentCard[]>([])
+const retryingDocumentId = ref<string | null>(null)
 const requirements = ref<Requirement[]>([])
+const projectFields = ref<ProjectField[]>([])
 const selectedPriorityRequirements = ref<Requirement[]>([])
-const priorityRequirements = computed(() => requirements.value.filter(item => item.review_status === 'PENDING'))
-const deferredRequirements = computed(() => requirements.value.filter(item => item.review_status === 'DEFERRED'))
+const priorityRequirements = computed(() => requirements.value
+  .filter(item => item.review_status === 'PENDING')
+  .sort((left, right) => {
+    const categoryRank: Record<string, number> = { QUALIFICATION: 0, PROJECT: 1, BUSINESS: 2, SCORING: 3 }
+    return Number(right.is_mandatory) - Number(left.is_mandatory)
+      || (categoryRank[left.category] ?? 9) - (categoryRank[right.category] ?? 9)
+      || Number(right.confidence ?? -1) - Number(left.confidence ?? -1)
+      || right.evidence_ids.length - left.evidence_ids.length
+  }))
 const confirmedRequirements = computed(() => requirements.value.filter(item => item.review_status === 'CONFIRMED'))
+const syncedRequirements = computed(() => confirmedRequirements.value.filter(item => item.extraction_source === 'PIPELINE_HUMAN'))
+const manuallyConfirmedRequirements = computed(() => confirmedRequirements.value.filter(item => item.extraction_source !== 'PIPELINE_HUMAN'))
+const confirmedProjectFields = computed(() =>
+  projectFields.value.filter(item => item.review_status === 'CONFIRMED')
+)
 const latestReport = ref<Report | null>(null)
 const showReportPreview = ref(false)
 const reportPreviewLoading = ref(false)
@@ -351,7 +477,139 @@ const evidenceLoading = ref(false)
 const selectedRequirement = ref<Requirement | null>(null)
 const selectedEvidence = ref<Evidence[]>([])
 const documentPollTimer = ref<number | null>(null)
-
+const startingPipelineVersions = new Set<string>()
+const tenderRuns = ref<TenderPipelineRun[]>([])
+const tenderRunPollTimer = ref<number | null>(null)
+const retryingTenderPipeline = ref(false)
+const restartingTenderExtraction = ref(false)
+const showTenderReviewDialog = ref(false)
+const tenderReviewSubmitting = ref(false)
+const tenderReviewDraftSaving = ref(false)
+const tenderReviewDrafts = ref<Record<string, string>>({})
+const tenderReviewNotes = ref<Record<string, string>>({})
+// 同一文档会保留历史失败记录；页面只能以最新且仍相关的运行决定当前动作，
+// 否则“旧失败 + 新待复核”会错误显示重试按钮并与当前任务冲突。
+const currentTenderRun = computed(() => tenderRuns.value[0] || null)
+const waitingTenderReview = computed(() =>
+  currentTenderRun.value?.status === 'WAITING_HUMAN_REVIEW' ? currentTenderRun.value : null
+)
+const tenderPipelineFailure = computed(() =>
+  currentTenderRun.value?.status === 'FAILED' ? currentTenderRun.value : null
+)
+const tenderPipelineIsActive = computed(() =>
+  Boolean(currentTenderRun.value && ['QUEUED', 'RUNNING', 'RESUME_QUEUED'].includes(currentTenderRun.value.status))
+)
+const tenderPipelineProducedNoRequirements = computed(() => {
+  const run = currentTenderRun.value
+  if (run?.status !== 'SUCCEEDED' || requirements.value.length) return false
+  const downstream = (run.stages || []).find(stage => stage.stage_name === 'downstream_analysis')
+  return downstream?.status === 'SKIPPED'
+    && downstream.output_summary?.reason === 'ANALYSIS_INPUT_NOT_READY'
+})
+const tenderPipelineCanRestart = computed(() =>
+  currentTenderRun.value?.status === 'CANCELLED' || tenderPipelineProducedNoRequirements.value
+)
+const requirementsEmptyState = computed(() => {
+  if (waitingTenderReview.value) return '招标字段已提取，等待审批通过后生成需求。'
+  if (tenderPipelineIsActive.value) return '正在提取招标字段，完成后将自动生成需求。'
+  if (tenderPipelineFailure.value) return '字段提取失败，请重新提取后再进行需求复核。'
+  if (tenderPipelineCanRestart.value) return '上一轮未生成可复核需求，请重新提取。'
+  if (bidDocs.value.some(doc => doc.parse_status === 'READY')) return '正在等待自动发起字段提取。'
+  if (bidDocs.value.length) return '招标文件正在解析，解析完成后将自动发起字段提取。'
+  return '请先上传招标文件。'
+})
+const tenderPipelineProgress = computed(() => {
+  const run = currentTenderRun.value
+  if (!run || !['QUEUED', 'RUNNING', 'RESUME_QUEUED'].includes(run.status)) return null
+  const stages = run.stages || []
+  const active = stages.find(stage => stage.status === 'RUNNING')
+  if (!active) return { title: '招标字段提取已入队', description: '正在等待 Worker 开始处理。' }
+  const labels: Record<string, string> = {
+    preflight: '检查解析结果', select_candidates: '筛选字段候选', extract: '提取招标字段',
+    validate: '校验提取结果', finalize: '写入项目事实',
+  }
+  const summary = active.output_summary || {}
+  if (active.stage_name === 'extract' && summary.batch_count !== undefined) {
+    return {
+      title: `正在提取招标字段：${summary.completed_batch_count || 0}/${summary.batch_count} 批`,
+      description: `并发处理 ${summary.llm_concurrency || '-'} 批请求；异常批次 ${summary.failed_batch_count || 0} 个。`,
+    }
+  }
+  return { title: `正在${labels[active.stage_name] || '处理'}`, description: '状态会自动刷新。' }
+})
+const tenderTagCatalog = computed(() => {
+  const catalog = waitingTenderReview.value?.pending_review?.tag_catalog || []
+  return new Map((Array.isArray(catalog) ? catalog : []).map((item: Record<string, any>) => [item.code, item]))
+})
+const tenderReviewIssues = computed(() => {
+  const issues = waitingTenderReview.value?.pending_review?.validation_issues || []
+  return (Array.isArray(issues) ? issues : [])
+    .filter((issue: unknown) => !String(issue).startsWith('EXTRACTION_BATCH_FAILED:'))
+    .map((issue: unknown) => {
+    const [kind, code] = String(issue).split(':', 2)
+    const tag = tenderTagCatalog.value.get(code)
+    const name = tag?.name || '相关字段'
+    const message = kind === 'MISSING_REQUIRED'
+      ? `缺少必填字段“${name}”`
+      : kind === 'ATTACHMENT_REFERENCE'
+        ? `“${name}”位于附件或附表，请补充核对`
+        : '存在需要补充的关键信息'
+    return { code, kind, message }
+    })
+})
+const extractionFailureMessages = computed(() => {
+  const failures = waitingTenderReview.value?.pending_review?.extraction_failures || []
+  return (Array.isArray(failures) ? failures : [])
+    .filter((item: unknown): item is Record<string, any> => Boolean(item) && typeof item === 'object')
+    .map(item => `第 ${Number(item.batch_index) + 1} 批提取异常：${item.reason || '模型输出无法解析'}`)
+})
+const tenderReviewRows = computed<Array<Record<string, any>>>(() => {
+  const values = waitingTenderReview.value?.pending_review?.extracted_tags || {}
+  const issuesByCode = new Map<string, string[]>()
+  for (const issue of tenderReviewIssues.value) {
+    if (!issue.code) continue
+    issuesByCode.set(issue.code, [...(issuesByCode.get(issue.code) || []), issue.message])
+  }
+  const codes = new Set([
+    ...tenderTagCatalog.value.keys(),
+    ...Object.keys(values),
+    ...issuesByCode.keys(),
+  ])
+  return [...codes].map(code => {
+    const item = values[code] as Record<string, any> | undefined
+    const issueText = (issuesByCode.get(code) || []).join('；')
+    const issueKinds = tenderReviewIssues.value
+      .filter(issue => issue.code === code)
+      .map(issue => issue.kind)
+    return {
+      code,
+      ...(tenderTagCatalog.value.get(code) || {}),
+      name: tenderTagCatalog.value.get(code)?.name || '待确认字段',
+      ...(item || {}),
+      value: item?.value,
+      confidence: Number(item?.confidence || 0),
+      issueText,
+      issueKinds,
+    }
+  }).sort((left, right) =>
+    Number(isMandatoryTenderRow(right)) - Number(isMandatoryTenderRow(left))
+    || right.confidence - left.confidence
+  )
+})
+const tenderReviewAlertTitle = computed(() => {
+  const count = tenderReviewIssues.value.length
+  const failedBatches = extractionFailureMessages.value.length
+  return failedBatches
+    ? `有 ${failedBatches} 个字段提取批次异常，其他结果仍可复核`
+    : count ? `有 ${count} 项信息需要注意，可直接审批或修改后审批` : '系统已完成信息提取，等待审批'
+})
+const tenderReviewAlertDescription = computed(() =>
+  extractionFailureMessages.value.length
+    ? extractionFailureMessages.value.join('；')
+    : tenderReviewIssues.value.length
+    ? tenderReviewIssues.value.map(item => item.message).join('；')
+    : '确认结果无误可直接审批；也可以打开表单修改或补充后审批。'
+)
 const businessStages = computed(() => {
   const documentReady = bidDocs.value.some(doc => doc.parse_status === 'READY')
   const documentFailed = bidDocs.value.some(doc => doc.parse_status === 'FAILED')
@@ -359,13 +617,18 @@ const businessStages = computed(() => {
   const reviewComplete = requirements.value.length > 0 && !outstandingPriorityReview
   const run = latestAnalysisRun.value
   const report = latestReport.value
+  // 发起重新分析后，旧报告仍保留用于查看和追溯，但不能继续显示为“本轮已生成”。
+  // 当前运行结束前，报告阶段应随整轮分析进入进行中状态。
+  const analysisActive = ['QUEUED', 'RUNNING', 'REPORT_QUEUED'].includes(run?.status || '')
+  const reportStageActive = run?.current_stage === 'REPORT' || run?.status === 'REPORT_QUEUED'
+  const extractionFailure = tenderPipelineFailure.value
   const analysisCurrent = run?.status === 'SUCCEEDED' && reviewComplete
-  const reportCurrent = report?.status === 'READY' && reviewComplete
+  const reportCurrent = report?.status === 'READY' && reviewComplete && !analysisActive
   return [
     { key: 'document', label: '文档处理', description: documentFailed ? '存在解析失败文档' : documentReady ? '已完成解析与结构化' : bidDocs.value.length ? '文档处理中' : '等待招标文件', status: documentFailed ? 'failed' : documentReady ? 'completed' : bidDocs.value.length ? 'processing' : 'pending' },
-    { key: 'review', label: '需求复核', description: reviewComplete ? (deferredRequirements.value.length ? `关键需求已确认；${deferredRequirements.value.length} 条低优先候选待后续处理` : '关键需求已确认') : outstandingPriorityReview ? `待确认 ${priorityRequirements.value.length} 条关键需求` : '等待需求生成', status: reviewComplete ? 'completed' : documentReady ? 'processing' : 'pending' },
-    { key: 'analysis', label: '匹配分析', description: analysisCurrent ? '匹配、风险与决策已完成' : run?.status === 'SUCCEEDED' ? '需求变更，需完成复核后重新分析' : run?.status === 'WAITING_HUMAN' ? '等待分析复核' : run ? '分析进行中' : reviewComplete ? '可发起匹配分析' : '等待需求复核完成', status: analysisCurrent ? 'completed' : run?.status === 'SUCCEEDED' ? 'pending' : run ? 'processing' : 'pending' },
-    { key: 'report', label: '报告生成', description: reportCurrent ? '报告已生成' : report?.status === 'READY' ? '需求变更，现有报告待更新' : report?.status === 'GENERATING' ? '报告生成中' : '等待匹配分析完成', status: reportCurrent ? 'completed' : report?.status === 'READY' ? 'pending' : report?.status === 'GENERATING' ? 'processing' : 'pending' },
+    { key: 'review', label: '需求复核', description: reviewComplete ? '当前匹配要求已确认' : extractionFailure ? (extractionFailure.error_message || '字段提取失败，请重新提取') : tenderPipelineProducedNoRequirements.value ? '本轮未生成可用于匹配的资格需求，请重新提取' : waitingTenderReview.value ? '字段已提取，等待审批' : outstandingPriorityReview ? `待确认 ${priorityRequirements.value.length} 条需求` : tenderPipelineIsActive.value ? '正在提取招标字段' : documentReady ? '等待发起字段提取' : '等待文档解析完成', status: reviewComplete ? 'completed' : extractionFailure || tenderPipelineProducedNoRequirements.value ? 'failed' : waitingTenderReview.value || tenderPipelineIsActive.value ? 'processing' : 'pending' },
+    { key: 'analysis', label: '匹配分析', description: analysisCurrent ? '匹配、风险与决策已完成' : run?.status === 'SUCCEEDED' ? '需求变更，需完成复核后重新分析' : run ? '分析进行中' : reviewComplete ? '可发起匹配分析' : '等待需求复核完成', status: analysisCurrent ? 'completed' : run?.status === 'SUCCEEDED' ? 'pending' : run ? 'processing' : 'pending' },
+    { key: 'report', label: '报告生成', description: reportCurrent ? '报告已生成' : analysisActive ? (reportStageActive ? '正在生成本轮报告' : '等待匹配、风险与决策完成') : report?.status === 'READY' ? '需求变更，现有报告待更新' : report?.status === 'GENERATING' ? '报告生成中' : '等待匹配分析完成', status: reportCurrent ? 'completed' : analysisActive || report?.status === 'GENERATING' ? 'processing' : report?.status === 'READY' ? 'pending' : 'pending' },
   ]
 })
 
@@ -435,7 +698,7 @@ const startDocumentPolling = () => {
     try {
       await loadDocuments()
       const isProcessing = bidDocs.value.some(doc =>
-        ['UPLOADED', 'QUEUED', 'RUNNING', 'PARSING', 'PARSED', 'STRUCTURING', 'INDEXING'].includes(doc.parse_status),
+        ['UPLOADED', 'QUEUED', 'RUNNING', 'PARSING', 'CLEANING', 'BUILDING_EVIDENCE', 'INDEXING'].includes(doc.parse_status),
       )
       if (!isProcessing) {
         stopDocumentPolling()
@@ -454,12 +717,282 @@ const stopDocumentPolling = () => {
   }
 }
 
+const startTenderRunPolling = () => {
+  stopTenderRunPolling()
+  tenderRunPollTimer.value = window.setInterval(async () => {
+    try {
+      await Promise.all([loadTenderRuns(), loadRequirements()])
+      if (!tenderPipelineIsActive.value) stopTenderRunPolling()
+    } catch {
+      // 下一次轮询会重试，避免短暂网络异常让状态停在旧值。
+    }
+  }, 3000)
+}
+
+const stopTenderRunPolling = () => {
+  if (tenderRunPollTimer.value) {
+    clearInterval(tenderRunPollTimer.value)
+    tenderRunPollTimer.value = null
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 数据加载
 // ---------------------------------------------------------------------------
 
 const loadDocuments = async () => {
   bidDocs.value = await documentApi.list(projectId)
+  // MinerU 只负责把原文件变成可审计的节点/Evidence；解析完成后才允许启动 LLM
+  // 标签提取。按文档版本去重，避免轮询期间重复创建 bid_pipeline 运行。
+  const existingRuns = await tenderPipelineApi.list(projectId)
+  tenderRuns.value = existingRuns
+  for (const document of bidDocs.value) {
+    const versionId = document.current_version_id
+    if (
+      document.parse_status === 'READY'
+      && versionId
+      && !startingPipelineVersions.has(versionId)
+      && !existingRuns.some(run => run.document_version_id === versionId)
+    ) {
+      startingPipelineVersions.add(versionId)
+      try {
+        await tenderPipelineApi.submit(projectId, versionId)
+        ElMessage.success(`已启动《${document.doc_name}》的招标字段复核`)
+        await loadTenderRuns()
+        startTenderRunPolling()
+      } catch (error: any) {
+        // 409 代表另一个页面或并发请求已创建运行，下一次刷新会从运行记录恢复状态。
+        if (error?.response?.status !== 409) ElMessage.error(error?.message || '招标字段提取启动失败')
+      }
+    }
+  }
+}
+
+const retryDocumentParse = async (document: BidDocumentCard) => {
+  retryingDocumentId.value = document.doc_id
+  try {
+    await documentApi.retry(projectId, document.doc_id)
+    ElMessage.success(`已重新提交《${document.doc_name}》解析任务`)
+    await loadDocuments()
+    startDocumentPolling()
+  } catch (error: any) {
+    ElMessage.error(error?.message || '重新解析提交失败')
+  } finally {
+    retryingDocumentId.value = null
+  }
+}
+
+const loadTenderRuns = async () => {
+  tenderRuns.value = await tenderPipelineApi.list(projectId)
+}
+
+const retryTenderPipeline = async () => {
+  const failedRun = tenderPipelineFailure.value
+  if (!failedRun) return
+  retryingTenderPipeline.value = true
+  try {
+    await tenderPipelineApi.submit(projectId, failedRun.document_version_id)
+    ElMessage.success('已重新提交字段提取任务')
+    await loadTenderRuns()
+    startTenderRunPolling()
+  } catch (error: any) {
+    ElMessage.error(error?.message || '字段提取重试提交失败')
+  } finally {
+    retryingTenderPipeline.value = false
+  }
+}
+
+const restartTenderExtraction = async () => {
+  const run = waitingTenderReview.value
+  const current = currentTenderRun.value
+  if (!current) return
+  restartingTenderExtraction.value = true
+  try {
+    let versionId = current.document_version_id
+    if (run) {
+      // 拒绝动作会异步恢复图并把运行改为 CANCELLED；必须等待它真正结束后再提交，
+      // 否则会被“同一文档已有进行中任务”的互斥锁拒绝。
+      await tenderPipelineApi.review(projectId, run.id, {
+        decision: 'rejected', approved_tag_codes: [], reviewed_tags: {},
+      })
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 500))
+        await loadTenderRuns()
+        const latest = currentTenderRun.value
+        if (latest?.status === 'CANCELLED') {
+          versionId = latest.document_version_id
+          break
+        }
+      }
+      if (currentTenderRun.value?.status !== 'CANCELLED') {
+        throw new Error('上一轮提取尚未结束，请稍后重试')
+      }
+    }
+    await tenderPipelineApi.submit(projectId, versionId)
+    ElMessage.success('已按新版报告字段范围重新提取')
+    await loadTenderRuns()
+    startTenderRunPolling()
+  } catch (error: any) {
+    ElMessage.error(error?.message || '重新提取提交失败')
+  } finally {
+    restartingTenderExtraction.value = false
+  }
+}
+
+const displayTenderTagValue = (value: unknown) =>
+  typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+
+const hasTenderTagValue = (value: unknown) => {
+  if (value === null || value === undefined) return false
+  if (typeof value === 'string') return Boolean(value.trim())
+  if (Array.isArray(value)) return value.length > 0
+  return true
+}
+
+const tenderReviewInputHint = (row: Record<string, any>) => {
+  if (row.value_example) return `示例：${row.value_example}`
+  if (row.data_type === 'number') return '请输入数字'
+  if (row.data_type === 'datetime') return '请输入日期时间，例如 2026-09-04T09:00:00'
+  if (row.data_type === 'boolean') return '请输入 true 或 false'
+  if (row.data_type === 'json' || row.is_multi_value) return '请输入合法 JSON'
+  return '请输入修正后的内容'
+}
+
+const formatTenderReviewDraft = (value: unknown) => {
+  if (value === null || value === undefined) return ''
+  return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+}
+
+const parseTenderReviewDraft = (row: Record<string, any>) => {
+  const raw = tenderReviewDrafts.value[row.code]
+  if (raw === undefined) return { valid: hasTenderTagValue(row.value), value: row.value }
+  const text = raw.trim()
+  if (!text) return { valid: false, value: null }
+  try {
+    if (row.is_multi_value || row.data_type === 'array' || row.data_type === 'json') {
+      const value = JSON.parse(text)
+      const valid = row.is_multi_value ? Array.isArray(value) && value.length > 0 : value !== null
+      return { valid, value }
+    }
+    if (row.data_type === 'number') {
+      const value = Number(text)
+      return { valid: Number.isFinite(value), value }
+    }
+    if (row.data_type === 'boolean') {
+      if (text === 'true') return { valid: true, value: true }
+      if (text === 'false') return { valid: true, value: false }
+      return { valid: false, value: null }
+    }
+    return { valid: true, value: text }
+  } catch {
+    return { valid: false, value: null }
+  }
+}
+
+const tenderReviewStatus = (row: Record<string, any>) => {
+  if (!hasTenderTagValue(row.value)) return '未提取'
+  if (row.issueKinds?.includes('ATTACHMENT_REFERENCE')) return '需确认附件'
+  if (row.issueText) return '需确认'
+  return '系统提取'
+}
+
+const isMandatoryTenderRow = (row: Record<string, any>) =>
+  Boolean(row.is_required || row.level_code === 'P0')
+
+const isTenderReviewValueChanged = (row: Record<string, any>) => {
+  const draft = tenderReviewDrafts.value[row.code]
+  if (draft === undefined) return false
+  return draft.trim() !== formatTenderReviewDraft(row.value).trim()
+}
+
+const openTenderReview = async () => {
+  const savedDraft = waitingTenderReview.value?.pending_review?.review_draft
+  const savedNotes = waitingTenderReview.value?.pending_review?.review_draft_notes
+  tenderReviewDrafts.value = Object.fromEntries(
+    tenderReviewRows.value.map(row => [
+      row.code,
+      typeof savedDraft?.[row.code] === 'string'
+        ? savedDraft[row.code]
+        : formatTenderReviewDraft(row.value),
+    ])
+  )
+  tenderReviewNotes.value = Object.fromEntries(
+    tenderReviewRows.value.map(row => [row.code, typeof savedNotes?.[row.code] === 'string' ? savedNotes[row.code] : ''])
+  )
+  showTenderReviewDialog.value = true
+}
+
+const saveTenderReviewDraft = async () => {
+  const run = waitingTenderReview.value
+  if (!run) return
+  tenderReviewDraftSaving.value = true
+  try {
+    const updatedRun = await tenderPipelineApi.saveReviewDraft(projectId, run.id, tenderReviewDrafts.value, tenderReviewNotes.value)
+    const index = tenderRuns.value.findIndex(item => item.id === updatedRun.id)
+    if (index >= 0) tenderRuns.value.splice(index, 1, updatedRun)
+    ElMessage.success('表单已暂存，可刷新后继续填写')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '表单暂存失败')
+  } finally {
+    tenderReviewDraftSaving.value = false
+  }
+}
+
+const submitTenderReview = async (decision: 'approved' | 'rejected') => {
+  const run = waitingTenderReview.value
+  if (!run) return
+  if (decision === 'approved') {
+    const invalidRows = tenderReviewRows.value.filter(row =>
+      tenderReviewDrafts.value[row.code]?.trim() && !parseTenderReviewDraft(row).valid
+    )
+    if (invalidRows.length) {
+      ElMessage.error(`请修正格式不正确的字段：${invalidRows.map(row => row.name).join('、')}`)
+      return
+    }
+  }
+  tenderReviewSubmitting.value = true
+  try {
+    const reviewedTags = decision === 'approved'
+      ? Object.fromEntries(
+          tenderReviewRows.value
+            .filter(row => isTenderReviewValueChanged(row) && parseTenderReviewDraft(row).valid)
+            .map(row => [row.code, { value: parseTenderReviewDraft(row).value, note: tenderReviewNotes.value[row.code].trim() }])
+        )
+      : {}
+    await tenderPipelineApi.review(projectId, run.id, {
+      decision,
+      // 未修改的字段沿用系统值；人工改动或新增的字段以人工值覆盖。
+      approved_tag_codes: decision === 'approved' ? undefined : [],
+      reviewed_tags: reviewedTags,
+    })
+    showTenderReviewDialog.value = false
+    ElMessage.success(decision === 'approved' ? '已审批通过，正在生成项目需求' : '已拒绝本轮字段提取结果')
+    await loadTenderRuns()
+    startDocumentPolling()
+  } catch (error: any) {
+    ElMessage.error(error?.message || '关键信息提交失败')
+  } finally {
+    tenderReviewSubmitting.value = false
+  }
+}
+
+const approveTenderExtraction = async () => {
+  const run = waitingTenderReview.value
+  if (!run) return
+  tenderReviewSubmitting.value = true
+  try {
+    await tenderPipelineApi.review(projectId, run.id, {
+      decision: 'approved',
+      reviewed_tags: {},
+    })
+    ElMessage.success('已审批通过，正在生成项目需求')
+    await loadTenderRuns()
+    startDocumentPolling()
+  } catch (error: any) {
+    ElMessage.error(error?.message || '审批提交失败')
+  } finally {
+    tenderReviewSubmitting.value = false
+  }
 }
 
 const loadReports = async () => {
@@ -467,7 +1000,11 @@ const loadReports = async () => {
 }
 
 const loadRequirements = async () => {
-  requirements.value = await requirementApi.list(projectId)
+  const [requirementRows, fieldRows] = await Promise.all([
+    requirementApi.list(projectId), requirementApi.listFields(projectId),
+  ])
+  requirements.value = requirementRows
+  projectFields.value = fieldRows
   selectedPriorityRequirements.value = []
 }
 
@@ -512,22 +1049,22 @@ const bulkReview = async (reviewStatus: 'CONFIRMED' | 'REJECTED') => {
   }
 }
 
-const promoteRequirement = async (item: any) => {
-  try {
-    await requirementApi.review(projectId, item.id, { review_status: 'PENDING', review_note: '人工提升至优先复核队列' })
-    await loadRequirements()
-    ElMessage.success('已提升至优先复核队列')
-  } catch (error: any) {
-    ElMessage.error(error?.message || '提升优先级失败')
-  }
-}
-
 const formatConfidence = (value: number | null) => value === null ? '-' : `${Math.round(value * 100)}%`
+
+const evidenceTable = (evidence: Evidence) => {
+  const raw = evidence.quoted_text || ''
+  if (!/<table\b/i.test(raw)) return null
+  const document = new DOMParser().parseFromString(raw, 'text/html')
+  const rows = Array.from(document.querySelectorAll('tr')).map(row =>
+    Array.from(row.querySelectorAll('th, td')).map(cell => cell.textContent?.trim() || '')
+  ).filter(row => row.length)
+  return rows.length < 2 ? null : { headers: rows[0], rows: rows.slice(1) }
+}
 
 const downloadReport = async (format: 'pdf' | 'md') => {
   if (!latestReport.value) return
   try {
-    await reportApi.download(latestReport.value.id, format)
+    await reportApi.download(projectId, latestReport.value.id, format)
   } catch (error: any) {
     ElMessage.error(error?.message || '报告下载失败')
   }
@@ -538,24 +1075,13 @@ const openReportPreview = async () => {
   showReportPreview.value = true
   reportPreviewLoading.value = true
   try {
-    previewReport.value = await reportApi.get(latestReport.value.id)
+    previewReport.value = await reportApi.get(projectId, latestReport.value.id)
   } catch (error: any) {
     ElMessage.error(error?.message || '报告加载失败')
   } finally {
     reportPreviewLoading.value = false
   }
 }
-
-const reportSectionName = (code: string) => ({
-  PROJECT_OVERVIEW: '项目概况', BID_SCHEDULE: '关键时间与递交清单',
-  QUALIFICATION_MATRIX: '资格条件与企业符合情况', ENTERPRISE_OVERVIEW: '企业概况',
-  EXECUTIVE_SUMMARY: '执行摘要', ANALYSIS_COVERAGE: '分析覆盖率',
-  CORE_RISKS: '核心风险', KEY_GAPS: '关键缺口', ACTION_PLAN: '行动计划',
-  MATERIAL_SUMMARY: '企业材料汇总', MATERIAL_LINKED: '已关联材料', MATERIAL_UNLINKED: '待补充材料',
-  QUALIFICATION_ANALYSIS: '资格分析', RISK_ITEMS: '全部风险事项',
-  ENTERPRISE_MATCHING: '企业匹配', SCORING_ANALYSIS: '评分要点',
-  COMPREHENSIVE_DECISION: '综合决策', TODOS: '待办事项',
-} as Record<string, string>)[code] || code
 
 const loadAnalysisRuns = async () => {
   analysisRuns.value = await analysisApi.list(projectId)
@@ -578,7 +1104,7 @@ const startUnifiedAnalysis = async () => {
 const openSnapshot = async (runId: string) => {
   showSnapshotDialog.value = true
   try {
-    selectedAnalysisRun.value = await analysisApi.get(runId)
+    selectedAnalysisRun.value = await analysisApi.get(projectId, runId)
   } catch (error: any) {
     ElMessage.error(error?.message || '分析快照加载失败')
   }
@@ -590,7 +1116,9 @@ const startAnalysisPolling = () => {
     await loadAnalysisRuns()
     if (!analysisIsActive.value) {
       stopAnalysisPolling()
-      if (latestAnalysisRun.value?.report_id) loadReports()
+      // 分析运行的报告 ID 保存在阶段输出中，不在列表响应的顶层字段；
+      // 结束后始终刷新报告，避免报告已生成但页面仍显示旧状态。
+      await loadReports()
     }
   }, 3000)
 }
@@ -603,13 +1131,13 @@ const stopAnalysisPolling = () => {
 }
 
 const analysisStatusText = (status: string) => ({
-  QUEUED: '排队中', RUNNING: '分析中', WAITING_HUMAN: '等待人工复核',
-  SUCCEEDED: '分析完成', FAILED: '分析失败', CANCELLED: '已结束',
+  QUEUED: '排队中', RUNNING: '分析中', REPORT_QUEUED: '报告生成中',
+  SUCCEEDED: '分析完成', FAILED: '分析失败',
 } as Record<string, string>)[status] || status
 
 const analysisTagType = (status: string) => ({
-  QUEUED: 'info', RUNNING: 'warning', WAITING_HUMAN: 'warning',
-  SUCCEEDED: 'success', FAILED: 'danger', CANCELLED: 'info',
+  QUEUED: 'info', RUNNING: 'warning', REPORT_QUEUED: 'warning',
+  SUCCEEDED: 'success', FAILED: 'danger',
 } as Record<string, any>)[status] || 'info'
 
 const analysisStageText = (stage: string) => ({
@@ -624,7 +1152,7 @@ const buildAnalysisStages = (run: AnalysisRun | null) => {
     ? 'REPORT'
     : run?.current_stage
   const currentIndex = keys.indexOf(current || '')
-  const outputs = run?.snapshot?.stage_outputs || {}
+  const outputs = run?.stage_outputs || {}
   return keys.map((key, index) => ({
     key,
     label: analysisStageText(key),
@@ -650,19 +1178,22 @@ onMounted(async () => {
     loadReports(),
     loadRequirements(),
     loadAnalysisRuns(),
+    loadTenderRuns(),
   ])
   if (results.some((r) => r.status === 'rejected')) {
     ElMessage.warning('部分数据加载失败，可刷新重试')
   }
 
-  if (bidDocs.value.some(doc => ['UPLOADED', 'QUEUED', 'RUNNING', 'PARSING', 'PARSED', 'STRUCTURING', 'INDEXING'].includes(doc.parse_status))) {
+  if (bidDocs.value.some(doc => ['UPLOADED', 'QUEUED', 'RUNNING', 'PARSING', 'CLEANING', 'BUILDING_EVIDENCE', 'INDEXING'].includes(doc.parse_status))) {
     startDocumentPolling()
   }
   if (analysisIsActive.value) startAnalysisPolling()
+  if (tenderPipelineIsActive.value) startTenderRunPolling()
 })
 
 onUnmounted(() => {
   stopDocumentPolling()
+  stopTenderRunPolling()
   stopAnalysisPolling()
 })
 
@@ -694,7 +1225,7 @@ const getDocStatusClass = (status?: string) => {
 }
 
 const getDocStatusText = (status?: string) => {
-  const map: Record<string, string> = { UPLOADED: '已上传', QUEUED: '排队中', PARSING: '解析中', PARSED: '已解析', STRUCTURING: '结构化', INDEXING: '索引中', READY: '就绪', FAILED: '失败' }
+  const map: Record<string, string> = { UPLOADED: '已上传', QUEUED: '排队中', PARSING: '解析中', CLEANING: '清洗中', BUILDING_EVIDENCE: '构建检索证据', INDEXING: '索引中', READY: '就绪', FAILED: '失败' }
   return map[status || ''] || status || '未知'
 }
 
@@ -1549,6 +2080,31 @@ const getDocStatusText = (status?: string) => {
   border-radius: var(--radius-xl);
 }
 
+.tender-progress-alert {
+  margin-top: var(--spacing-3);
+}
+
+.tender-review-required-alert { margin-bottom: var(--spacing-4); }
+.tender-review-form { max-height: calc(94vh - 240px); overflow-y: auto; padding: 2px var(--spacing-2) var(--spacing-2); }
+.tender-review-field { padding: var(--spacing-4); border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-surface); }
+.tender-review-field + .tender-review-field { margin-top: var(--spacing-3); }
+.tender-review-field.is-required { border-color: color-mix(in srgb, var(--el-color-danger) 42%, var(--color-border)); }
+.tender-review-field :deep(.el-form-item) { margin-bottom: 0; }
+.tender-review-field :deep(.el-form-item__label) { width: 100%; height: auto; line-height: 1.5; padding-bottom: var(--spacing-2); }
+.tender-review-field-label { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--spacing-2); font-size: var(--font-size-base); font-weight: 700; color: var(--color-text-primary); }
+.tender-review-field-label small { font-family: 'SF Mono', Monaco, monospace; color: var(--color-text-muted); font-size: var(--font-size-xs); font-weight: 400; }
+.tender-review-field-issue { margin-bottom: var(--spacing-2); }
+.tender-review-field-meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--spacing-3); margin-bottom: var(--spacing-2); color: var(--color-text-muted); font-size: var(--font-size-xs); }
+.tender-review-input-label { display: block; margin: var(--spacing-3) 0 var(--spacing-1); color: var(--color-text-secondary); font-size: var(--font-size-sm); font-weight: 600; }
+.tender-review-input-label em { margin-left: var(--spacing-1); color: var(--el-color-danger); font-size: var(--font-size-xs); font-style: normal; }
+.tender-review-evidence { margin-top: var(--spacing-3); color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+.tender-review-evidence summary { cursor: pointer; color: var(--color-accent); }
+.tender-review-evidence pre, .tender-review-evidence blockquote { max-height: 180px; overflow: auto; margin: var(--spacing-2) 0 0; padding: var(--spacing-3); white-space: pre-wrap; word-break: break-word; }
+.tender-review-evidence pre { border-radius: var(--radius-md); background: var(--color-background); }
+.tender-review-evidence blockquote { border-left: 3px solid var(--color-accent); background: color-mix(in srgb, var(--color-accent) 5%, transparent); }
+.tender-review-empty { margin: var(--spacing-2) 0 0; color: var(--color-text-muted); }
+.tender-review-field :deep(.el-textarea__inner) { font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace; line-height: 1.65; }
+
 .next-step-action {
   display: flex;
   align-items: center;
@@ -1689,6 +2245,31 @@ const getDocStatusText = (status?: string) => {
   white-space: pre-wrap;
   line-height: 1.75;
   color: var(--color-text-primary);
+}
+
+.evidence-table-wrap {
+  overflow-x: auto;
+}
+
+.evidence-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.evidence-table th,
+.evidence-table td {
+  min-width: 88px;
+  padding: var(--spacing-2);
+  border: 1px solid var(--color-border);
+  vertical-align: top;
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.evidence-table th {
+  background: var(--color-surface);
+  font-weight: 600;
 }
 
 .report-preview-header {
@@ -1862,8 +2443,15 @@ const getDocStatusText = (status?: string) => {
   flex: 1;
 }
 
-.card-action {
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
   margin-left: auto;
+  flex: none;
+}
+
+.card-action {
   flex: none;
 }
 

@@ -76,6 +76,9 @@ export interface BidDocumentCard {
   doc_name: string
   parse_status: string
   created_at: string | null
+  current_version_id?: string
+  progress_percent?: number | null
+  progress_message?: string | null
 }
 
 export type DocumentType = 'TENDER' | 'ENTERPRISE' | 'LEGAL' | 'CASE'
@@ -95,7 +98,7 @@ export interface DocumentVersion {
   completed_at: string | null
 }
 
-export type ParseStatus = 'UPLOADED' | 'QUEUED' | 'PARSING' | 'PARSED' | 'STRUCTURING' | 'INDEXING' | 'READY' | 'FAILED'
+export type ParseStatus = 'UPLOADED' | 'QUEUED' | 'PARSING' | 'CLEANING' | 'BUILDING_EVIDENCE' | 'INDEXING' | 'READY' | 'FAILED'
 
 export interface DocumentNode {
   id: string
@@ -150,8 +153,19 @@ export interface Requirement {
   review_status: ReviewStatus
   primary_evidence_id: string | null
   evidence_ids: string[]
+  extraction_source: string
   reviewed_at: string | null
   review_note: string | null
+}
+
+export interface ProjectField {
+  id: string
+  field_code: string
+  value: Record<string, any>
+  confidence: number | null
+  review_status: ReviewStatus
+  primary_evidence_id: string | null
+  extraction_source: string
 }
 
 export type RequirementCategory = 'PROJECT' | 'QUALIFICATION' | 'COMMERCIAL' | 'SCORING'
@@ -178,7 +192,7 @@ export interface Risk {
 
 export type RiskType = 'QUALIFICATION' | 'COMPLIANCE' | 'FORMAT' | 'TIME' | 'FINANCIAL' | 'TECHNICAL' | 'COMMERCIAL' | 'DOCUMENT'
 export type RiskSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO'
-export type RiskStatus = 'PENDING' | 'CONFIRMED' | 'RESOLVED' | 'FALSE_POSITIVE' | 'IGNORED'
+export type RiskStatus = 'OPEN' | 'ACCEPTED' | 'RESOLVED' | 'DISMISSED'
 
 // 企业材料
 export interface EnterpriseMaterial {
@@ -194,9 +208,7 @@ export interface EnterpriseMaterial {
   amount: number | null
   currency: string
   attributes: Record<string, any>
-  status: 'PENDING' | 'CONFIRMED' | 'REJECTED' | 'DEFERRED'
-  evidence_ids: string[]
-  documents: MaterialDocument[]
+  status: 'DRAFT' | 'CONFIRMED' | 'ARCHIVED'
   created_at: string
   updated_at: string
 }
@@ -248,24 +260,27 @@ export type DecisionSuggestion = 'RECOMMEND' | 'CAUTION' | 'HOLD' | 'REJECT'
 export interface Report {
   id: string
   project_id: string
-  version_no: number
+  report_type: 'SIMPLE' | 'FULL' | 'SUMMARY'
   status: ReportStatus
+  is_stale: boolean
+  analysis_run_id: string | null
+  finding_count: number
+  content_markdown: string | null
+  citations: Array<{ evidence_id: string; quoted_text: string; locator: Record<string, any> }>
   error_code: string | null
   error_message: string | null
-  generated_by: string
-  generated_at: string | null
   created_at: string
+  started_at: string | null
+  completed_at: string | null
   sections?: ReportSection[]
 }
 
 export interface ReportSection {
-  section_code: string
-  order_no: number
+  title: string
   content_markdown: string
-  evidence_ids: string[]
 }
 
-export type ReportStatus = 'PENDING' | 'GENERATING' | 'READY' | 'FAILED'
+export type ReportStatus = 'QUEUED' | 'GENERATING' | 'READY' | 'FAILED'
 
 // 任务
 export interface Task {
@@ -285,26 +300,18 @@ export interface Task {
 export type TaskType = 'PARSE_DOCUMENT' | 'EXTRACT_REQUIREMENTS' | 'INDEX_DOCUMENT' | 'RUN_RISK_CHECK' | 'RUN_MATCH' | 'GENERATE_DECISION' | 'GENERATE_REPORT' | 'RUN_PROJECT_ANALYSIS' | 'ANSWER_QUESTION'
 export type TaskStatus = 'QUEUED' | 'RUNNING' | 'WAITING_HUMAN_REVIEW' | 'SUCCEEDED' | 'FAILED'
 
-export interface AnalysisSnapshot {
-  tender_version_ids: string[]
-  enterprise_material_ids: string[]
-  rule_version_ids: string[]
-  stage_outputs: Record<string, Record<string, any>>
-}
-
 export interface AnalysisRun {
   id: string
   project_id: string
-  status: 'QUEUED' | 'RUNNING' | 'WAITING_HUMAN' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED'
+  status: 'QUEUED' | 'RUNNING' | 'REPORT_QUEUED' | 'SUCCEEDED' | 'FAILED'
   current_stage: string
-  task_id: string | null
   report_id: string | null
+  stage_outputs: Record<string, Record<string, any>>
   error_code: string | null
   error_message: string | null
   started_at: string | null
   completed_at: string | null
   created_at: string
-  snapshot?: AnalysisSnapshot | null
 }
 
 // 规则
@@ -473,15 +480,30 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   citations?: Citation[]
+  agent_trace?: AgentTraceItem[]
   streaming?: boolean
   status?: ChatMessageStatus
   created_at: string
 }
 
+export interface AgentTraceItem {
+  tool: string
+  status: 'completed' | 'failed' | 'blocked' | string
+  elapsed_ms: number
+  evidence_count?: number
+  detail?: string | null
+}
+
 export interface Citation {
-  evidence_id: string
+  // ID 仅供前端关联，不直接作为给用户看的文案。
+  source?: 'PROJECT_EVIDENCE' | 'LEGAL_KNOWLEDGE' | 'PROJECT_REPORT'
+  evidence_id?: string | null
+  knowledge_chunk_id?: string | null
+  report_id?: string | null
   document_id?: string
+  quoted_text?: string
   content?: string
+  locator?: Record<string, any>
 }
 
 // 知识库
@@ -501,5 +523,8 @@ export interface KnowledgeEntry {
   published_at: string | null
   source_document_version_id: string | null
   source_parse_status: string | null
+  source_parse_error: string | null
+  source_parse_progress?: number | null
+  source_parse_message?: string | null
   source_cleaning_summary: Record<string, any> | null
 }

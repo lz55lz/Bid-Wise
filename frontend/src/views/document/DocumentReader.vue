@@ -7,9 +7,9 @@
           返回
         </el-button>
         <div class="document-info">
-          <span class="doc-title">{{ document?.versions?.[0]?.file_name || document?.logical_name }}</span>
-          <span :class="['badge', `badge-${getDocStatusClass(document?.versions?.[0]?.parse_status)}`]">
-            {{ getDocStatusText(document?.versions?.[0]?.parse_status) }}
+          <span class="doc-title">{{ document?.current_version?.original_file_name || document?.logical_name }}</span>
+          <span :class="['badge', `badge-${getDocStatusClass(document?.current_version?.parse_status)}`]">
+            {{ getDocStatusText(document?.current_version?.parse_status) }}
           </span>
         </div>
       </div>
@@ -229,8 +229,8 @@ const contextItems = ref<ContextItem[]>([])
 const activeContextType = ref<string>('')
 
 const isParsed = computed(() => {
-  const status = document.value?.versions?.[0]?.parse_status
-  return status === 'READY' || status === 'PARSED'
+  const status = document.value?.current_version?.parse_status
+  return status === 'READY'
 })
 
 const goBack = () => {
@@ -252,8 +252,8 @@ const getDocStatusClass = (status?: string) => {
 
 const getDocStatusText = (status?: string) => {
   const map: Record<string, string> = {
-    UPLOADED: '已上传', QUEUED: '排队中', PARSING: '解析中', PARSED: '已解析',
-    STRUCTURING: '结构化', INDEXING: '索引中', READY: '就绪', FAILED: '失败'
+    UPLOADED: '已上传', QUEUED: '排队中', PARSING: '解析中', CLEANING: '清洗中',
+    BUILDING_EVIDENCE: '构建检索证据', INDEXING: '索引中', READY: '就绪', FAILED: '失败'
   }
   return map[status || ''] || status
 }
@@ -288,8 +288,7 @@ const viewEvidence = () => {
 
 const handleDownload = async () => {
   try {
-    const { url } = await documentApi.downloadUrl(documentId)
-    window.open(url, '_blank')
+    await documentApi.download(projectId, documentId)
   } catch {
     ElMessage.error('获取下载链接失败')
   }
@@ -302,19 +301,27 @@ const showEvidenceDetail = (evidence: Evidence) => {
 onMounted(async () => {
   loading.value = true
   try {
-    document.value = await documentApi.get(documentId)
+    document.value = await documentApi.get(projectId, documentId)
     // 后端单页上限为 200；逐页读取，避免长招标文件被静默截断。
     const pageSize = 200
     let offset = 0
     const allNodes: DocumentNode[] = []
     while (true) {
-      const response = await documentApi.getNodes(documentId, { offset, limit: pageSize })
+      const response = await documentApi.getNodes(projectId, documentId, { offset, limit: pageSize })
       const pageNodes = response?.items ?? []
       allNodes.push(...pageNodes)
       if (pageNodes.length < pageSize) break
       offset += pageNodes.length
     }
     nodes.value = allNodes
+    const tags = await documentApi.getTags(projectId, documentId)
+    contextItems.value = tags.map(tag => ({
+      id: tag.id,
+      type: 'requirement' as const,
+      title: tag.tag_code,
+      description: `置信度 ${Math.round(tag.confidence * 100)}% · ${tag.review_status}`,
+      status: tag.review_status === 'UNREVIEWED' ? 'pending' as const : 'ready' as const,
+    }))
     if (nodes.value.length > 0) {
       currentNode.value = nodes.value[0] as DocumentNode & { evidence?: Evidence }
     }

@@ -21,10 +21,10 @@
 
       <el-select v-model="statusFilter" placeholder="处理状态" clearable style="width: 140px">
         <el-option label="全部" value="" />
-        <el-option label="待处理" value="PENDING" />
-        <el-option label="已确认" value="CONFIRMED" />
+        <el-option label="待处理" value="OPEN" />
+        <el-option label="已接受" value="ACCEPTED" />
         <el-option label="已解决" value="RESOLVED" />
-        <el-option label="误报" value="FALSE_POSITIVE" />
+        <el-option label="已忽略" value="DISMISSED" />
       </el-select>
 
       <el-select v-model="typeFilter" placeholder="风险类型" clearable style="width: 140px">
@@ -98,7 +98,7 @@
           <span class="risk-time">{{ formatDate(risk.created_at) }}</span>
           <div class="risk-actions">
             <el-button text size="small" @click="viewDetail(risk)">查看详情</el-button>
-            <el-button v-if="risk.status === 'PENDING'" type="primary" size="small" @click="handleReview(risk)">
+            <el-button v-if="risk.status === 'OPEN'" type="primary" size="small" @click="handleReview(risk)">
               复核
             </el-button>
           </div>
@@ -136,10 +136,9 @@
 
         <el-form-item label="处理状态" prop="status">
           <el-select v-model="reviewForm.status" style="width: 100%">
-            <el-option label="已确认" value="CONFIRMED" />
+            <el-option label="已接受" value="ACCEPTED" />
             <el-option label="已解决" value="RESOLVED" />
-            <el-option label="误报" value="FALSE_POSITIVE" />
-            <el-option label="已忽略" value="IGNORED" />
+            <el-option label="已忽略" value="DISMISSED" />
           </el-select>
         </el-form-item>
 
@@ -211,7 +210,7 @@ const refreshStats = () => {
   stats.high = allRisks.value.filter((r) => r.severity === 'HIGH').length
   stats.medium = allRisks.value.filter((r) => r.severity === 'MEDIUM').length
   stats.low = allRisks.value.filter((r) => r.severity === 'LOW').length
-  stats.pending = allRisks.value.filter((r) => r.status === 'PENDING').length
+  stats.pending = allRisks.value.filter((r) => r.status === 'OPEN').length
 }
 
 const showReviewDialog = ref(false)
@@ -261,7 +260,7 @@ const handleReview = (risk: RiskWithProject) => {
   reviewForm.id = risk.id
   reviewForm.project_id = risk.project_id
   reviewForm.severity = risk.severity
-  reviewForm.status = 'CONFIRMED'
+  reviewForm.status = 'ACCEPTED'
   reviewForm.resolution = ''
   showReviewDialog.value = true
 }
@@ -288,8 +287,8 @@ const handleSubmitReview = async () => {
 
 const getSeverityText = (s: string) => ({ CRITICAL: '严重', HIGH: '高', MEDIUM: '中', LOW: '低', INFO: '提示' }[s] || s)
 const getRiskTypeText = (t: string) => ({ QUALIFICATION: '资格', COMPLIANCE: '合规', FORMAT: '格式', TIME: '时间', FINANCIAL: '财务', TECHNICAL: '技术', COMMERCIAL: '商务', DOCUMENT: '文档' }[t] || t)
-const getStatusClass = (s: string) => ({ PENDING: 'draft', CONFIRMED: 'warning', RESOLVED: 'active', FALSE_POSITIVE: 'failed', IGNORED: 'failed' }[s] || 'draft')
-const getStatusText = (s: string) => ({ PENDING: '待处理', CONFIRMED: '已确认', RESOLVED: '已解决', FALSE_POSITIVE: '误报', IGNORED: '已忽略' }[s] || s)
+const getStatusClass = (s: string) => ({ OPEN: 'draft', ACCEPTED: 'warning', RESOLVED: 'active', DISMISSED: 'failed' }[s] || 'draft')
+const getStatusText = (s: string) => ({ OPEN: '待处理', ACCEPTED: '已接受', RESOLVED: '已解决', DISMISSED: '已忽略' }[s] || s)
 const formatDate = (d: string) => dayjs(d).format('YYYY-MM-DD HH:mm')
 
 onMounted(() => {

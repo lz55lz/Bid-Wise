@@ -1,60 +1,66 @@
-"""Bid risk analysis API.
-
-Submit risk analysis tasks and review risk flags for a bid project.
-Risks are derived from bid requirements, enterprise profile, and qualification gaps.
-"""
-
+# ruff: noqa: E501
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter
+from pydantic import BaseModel, Field
 
-from app.api.deps import CurrentUser, get_current_user
-from app.db.session import get_db_session
-from app.integrations.task_publisher import ArqTaskPublisher
-from app.schemas.documents import TaskResponse
-from app.schemas.risks import RiskResponse, RiskReviewRequest
-from app.services.risk_service import RiskService
+from app.api.deps import CurrentUser, DatabaseSession
+from app.modules.projects.service import ProjectService
+from app.modules.risks.service import RiskService
 
-router = APIRouter(tags=["risks"])
+router = APIRouter(prefix="/projects/{project_id}/risks", tags=["项目风险"])
 
 
-@router.post(
-    "/projects/{project_id}/risks/run",
-    response_model=TaskResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def run_risk_check(
-    # Submit async risk analysis task (ARQ background worker).
-    # Returns task ID for status polling.
-    project_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> TaskResponse:
-    return RiskService(session).submit(
-        project_id, current_user.id, current_user.role_codes, ArqTaskPublisher()
-    )
+class RiskReviewRequest(BaseModel):
+    status: str = Field(pattern="^(ACCEPTED|RESOLVED|DISMISSED)$")
+    resolution: str | None = Field(default=None, max_length=2000)
 
 
-@router.get("/projects/{project_id}/risks", response_model=list[RiskResponse])
-def list_risks(
-    # List all identified risks for a project.
-    project_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> list[RiskResponse]:
-    return RiskService(session).list(project_id, current_user.id, current_user.role_codes)
+@router.post("/run")
+async def run_risks(
+    project_id: UUID, current_user: CurrentUser, session: DatabaseSession
+) -> dict[str, int]:
+    await ProjectService(session).require_document_write(project_id, current_user)
+    risks = await RiskService(session).run(project_id, current_user.id)
+    return {"count": len(risks)}
 
 
-@router.patch("/projects/{project_id}/risks/{risk_id}", response_model=RiskResponse)
-def review_risk(
-    # Mark a risk as reviewed/accepted or update its notes.
+@router.get("")
+async def list_risks(
+    project_id: UUID, current_user: CurrentUser, session: DatabaseSession
+) -> list[dict[str, object]]:
+    await ProjectService(session).require_project_access(project_id, current_user)
+    risks = await RiskService(session).list(project_id)
+    return [
+        {
+            "id": str(item.id),
+            "project_id": str(item.project_id),
+            "rule_code": item.rule_code,
+            "rule_version_id": None if item.rule_version_id is None else str(item.rule_version_id),
+            "risk_type": item.risk_type,
+            "severity": item.severity,
+            "title": item.title,
+            "description": item.description,
+            "status": item.status,
+            "resolution": item.resolution,
+            "trigger_data": item.trigger_data,
+            "created_at": item.created_at.isoformat(),
+            "updated_at": item.updated_at.isoformat(),
+        }
+        for item in risks
+    ]
+
+
+@router.patch("/{risk_id}")
+async def review_risk(
     project_id: UUID,
     risk_id: UUID,
     payload: RiskReviewRequest,
-    current_user: CurrentUser = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> RiskResponse:
-    return RiskService(session).review(
-        project_id, risk_id, current_user.id, current_user.role_codes, payload
+    current_user: CurrentUser,
+    session: DatabaseSession,
+) -> dict[str, str]:
+    await ProjectService(session).require_document_write(project_id, current_user)
+    item = await RiskService(session).review(
+        project_id, risk_id, payload.status, payload.resolution
     )
+    return {"id": str(item.id), "status": item.status}

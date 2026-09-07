@@ -6,14 +6,49 @@
 import { ref, computed, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { renderMarkdown } from '@/composables/useMarkdown'
+import type { Citation } from '@/types'
 
 const props = defineProps<{
   content: string
+  citations?: Citation[]
 }>()
 
 const containerRef = ref<HTMLElement>()
 
-const renderedHtml = computed(() => renderMarkdown(props.content))
+const renderedHtml = computed(() => renderMarkdown(replaceCitationIds(props.content, props.citations || [])))
+
+/**
+ * UUID 是审计关联键，不是阅读文案。正文中将其替换为稳定的序号，原文和章节信息
+ * 由下方的「参考来源」卡片呈现；复制/导出的 Markdown 仍保留后端原始证据 ID。
+ */
+function replaceCitationIds(content: string, citations: Citation[]): string {
+  const projectIndex = new Map<string, number>()
+  const legalIndex = new Map<string, number>()
+  const reportIndex = new Map<string, number>()
+  let projectCount = 0
+  let legalCount = 0
+  let reportCount = 0
+  for (const citation of citations) {
+    if (citation.evidence_id && !projectIndex.has(citation.evidence_id)) {
+      projectIndex.set(citation.evidence_id, ++projectCount)
+    }
+    if (citation.knowledge_chunk_id && !legalIndex.has(citation.knowledge_chunk_id)) {
+      legalIndex.set(citation.knowledge_chunk_id, ++legalCount)
+    }
+    if (citation.report_id && !reportIndex.has(citation.report_id)) {
+      reportIndex.set(citation.report_id, ++reportCount)
+    }
+  }
+  return content.replace(/【(Evidence|Legal|Report):\s*([0-9a-fA-F-]{36})】/g, (_raw, kind, id) => {
+    const index = kind === 'Evidence'
+      ? projectIndex.get(id)
+      : kind === 'Legal'
+        ? legalIndex.get(id)
+        : reportIndex.get(id)
+    const label = kind === 'Evidence' ? '项目证据' : kind === 'Legal' ? '法规依据' : '项目报告'
+    return index ? `【${label} ${index}】` : `【${label}】`
+  })
+}
 
 async function copyCode(code: string) {
   try {

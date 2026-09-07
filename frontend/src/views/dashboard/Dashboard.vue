@@ -205,7 +205,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useProjectStore } from '@/stores/project'
-import { documentApi, reportApi, requirementApi, riskApi } from '@/api'
+import { dashboardApi } from '@/api'
 import { ElMessage } from 'element-plus'
 import { Plus, ArrowRight, FolderOpened, Warning, CircleCheck, Document, Calendar, Location } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
@@ -234,8 +234,7 @@ const stats = reactive({
 })
 
 // 最近项目
-const recentProjects = ref<Project[]>([])
-const projectPhases = ref<Record<string, string>>({})
+const recentProjects = ref<any[]>([])
 
 // 待办事项
 type DashboardTask = { id: string; type: 'risk' | 'match' | 'decision'; title: string; description: string; actionText: string; projectId: string }
@@ -263,7 +262,9 @@ const createRules: FormRules = {
 }
 
 const handleCreateProject = () => {
-  showCreateDialog.value = true
+  // 项目必须先绑定至少一家投标企业；完整创建表单位于项目管理页，不能在工作台
+  // 保留一份缺少 enterprise_ids 的旧表单并让后端返回 422。
+  router.push('/projects')
 }
 
 const handleCreateSubmit = async () => {
@@ -275,8 +276,7 @@ const handleCreateSubmit = async () => {
 
     const project = await projectStore.createProject({
       ...createForm,
-      deadline: createForm.deadline?.toISOString(),
-      status: 'DRAFT',
+      bid_deadline: createForm.deadline?.toISOString(),
     } as Partial<Project>)
 
     ElMessage.success('项目创建成功')
@@ -320,11 +320,7 @@ const formatDate = (date: string) => {
   return dayjs(date).format('MM/DD')
 }
 
-const getBaseProjectPhase = (status?: string) => ({
-  DRAFT: '待上传招标文件', ACTIVE: '投标准备中', ARCHIVED: '项目已归档',
-} as Record<string, string>)[status || ''] || '状态待更新'
-
-const getProjectPhase = (project: Project) => projectPhases.value[project.id] || getBaseProjectPhase(project.status)
+const getProjectPhase = (project: any) => project.phase?.label || '状态待更新'
 
 const getTaskIcon = (type: string) => {
   const map: Record<string, any> = {
@@ -340,46 +336,14 @@ const handleTaskAction = (task: typeof pendingTasks.value[0]) => {
 }
 
 onMounted(async () => {
-  // 获取最近项目
   try {
-    const response = await projectStore.fetchProjects()
-    if (Array.isArray(response)) {
-      recentProjects.value = response
-      const results = await Promise.allSettled(response.map(async (project) => ({
-        project,
-        report: await reportApi.latest(project.id),
-        documents: await documentApi.list(project.id),
-        requirements: await requirementApi.list(project.id),
-        risks: await riskApi.list(project.id),
-      })))
-      const phases: Record<string, string> = {}
-      const tasks: DashboardTask[] = []
-      let readyDocuments = 0
-      let pendingRisks = 0
-      let completedReports = 0
-      for (const result of results) {
-        if (result.status !== 'fulfilled') continue
-        const { project, report, documents, requirements, risks } = result.value
-        phases[project.id] = report?.status === 'READY'
-          ? '报告已生成'
-          : result.value.report?.status === 'GENERATING'
-            ? '报告生成中'
-            : getBaseProjectPhase(project.status)
-        readyDocuments += documents.filter((document: any) => document.parse_status === 'READY').length
-        completedReports += report?.status === 'READY' ? 1 : 0
-        const projectPendingRisks = risks.filter(risk => risk.status === 'PENDING')
-        pendingRisks += projectPendingRisks.length
-        const priorityRequirements = requirements.filter(requirement => requirement.review_status === 'PENDING')
-        if (priorityRequirements.length) tasks.push({ id: `review-${project.id}`, projectId: project.id, type: 'match', title: '需求待复核', description: `「${project.name}」有 ${priorityRequirements.length} 条关键需求待确认`, actionText: '进入复核' })
-        if (projectPendingRisks.length) tasks.push({ id: `risk-${project.id}`, projectId: project.id, type: 'risk', title: '风险待处理', description: `「${project.name}」有 ${projectPendingRisks.length} 条风险待处理`, actionText: '查看项目' })
-      }
-      projectPhases.value = phases
-      pendingTasks.value = tasks
-      stats.activeProjects = response.filter(project => project.status === 'ACTIVE').length
-      stats.pendingRisks = pendingRisks
-      stats.completedReports = completedReports
-      stats.documents = readyDocuments
-    }
+    const summary = await dashboardApi.summary()
+    recentProjects.value = summary.projects
+    pendingTasks.value = summary.tasks.map(item => ({ ...item, projectId: item.project_id, actionText: item.action_text }))
+    stats.activeProjects = summary.stats.active_projects
+    stats.pendingRisks = summary.stats.pending_risks
+    stats.completedReports = summary.stats.completed_reports
+    stats.documents = summary.stats.documents
   } catch (error) {
     // ignore
   }

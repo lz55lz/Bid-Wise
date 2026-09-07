@@ -173,19 +173,13 @@ const isAdmin = computed(() =>
 )
 
 const healthItems = computed(() => {
-  const checks = readiness.value?.checks || {}
   return [
-    { key: 'postgres', label: 'PostgreSQL', available: checks.postgres === true },
-    { key: 'redis', label: 'Redis', available: checks.redis === true },
-    { key: 'minio', label: '对象存储', available: checks.minio === true },
-    { key: 'pgvector', label: '向量检索', available: checks.pgvector === true },
-    { key: 'mineru', label: '文档解析', available: checks.mineru === true },
-    { key: 'ai', label: 'AI 服务', available: readiness.value?.ai_available === true },
+    { key: 'api', label: '核心服务', available: readiness.value?.status === 'ready' },
   ]
 })
 
 const isSystemReady = computed(() =>
-  readiness.value?.status === 'ok' && healthItems.value.every((item) => item.available),
+  readiness.value?.status === 'ready',
 )
 
 const getRoleText = (role: string) => ({

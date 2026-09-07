@@ -1,30 +1,23 @@
-"""Audit log query API.
+"""审计日志查询接口。"""
 
-Provides read-only access to system audit logs for tracking user actions
-and system changes. Filterable by project.
-"""
-
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Query
 
-from app.api.deps import CurrentUser, get_current_user
-from app.db.session import get_db_session
-from app.schemas.audit import AuditLogResponse
-from app.services.audit_query_service import AuditQueryService
+from app.api.deps import CurrentUser, DatabaseSession
+from app.modules.identity.audit_query_service import AuditQueryService, response
 
-router = APIRouter(tags=["audits"])
+router = APIRouter(prefix="/audit-logs", tags=["审计日志"])
 
 
-@router.get("/audit-logs", response_model=list[AuditLogResponse])
-def list_audit_logs(
-    # Query audit logs for the current user.
-    # Filter by project_id to narrow results to a specific project.
-    project_id: UUID | None = Query(default=None),
-    current_user: CurrentUser = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> list[AuditLogResponse]:
-    return AuditQueryService(session).list_for_actor(
-        current_user.id, current_user.role_codes, project_id
-    )
+@router.get("")
+async def list_audit_logs(
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    project_id: UUID | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> list[dict[str, object]]:
+    logs = await AuditQueryService(session).list(current_user, project_id, page, page_size)
+    return [response(log) for log in logs]

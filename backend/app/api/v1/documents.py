@@ -1,189 +1,187 @@
-"""Tender document management API.
-
-Upload, parse, version, and download tender bid documents (PDF/DOCX).
-Provides document nodes (chunks), clause extraction, and task status polling.
-"""
+"""项目文档 HTTP 接口。"""
 
 from typing import Annotated
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
+from fastapi import APIRouter, File, Form, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import CurrentUser, get_current_user, get_document_service
-from app.core.config import Settings, get_settings
-from app.schemas.documents import (
-    BidDocumentCard,
+from app.api.deps import ApplicationSettings, CurrentUser, DatabaseSession
+from app.modules.documents.schemas import (
     DocumentNodePage,
-    DocumentResponse,
-    DocumentTaskResponse,
+    DocumentParseJobResponse,
     DocumentVersionResponse,
-    TaskResponse,
-    TenderClauseResponse,
+    ProjectDocumentResponse,
 )
-from app.services.document_service import DocumentService
+from app.modules.documents.service import DocumentService
+from app.modules.tender_analysis.document_tag_service import DocumentTagService
 
-router = APIRouter(tags=["documents"])
+router = APIRouter(prefix="/projects/{project_id}/documents", tags=["项目文档"])
 
 
-@router.get("/projects/{project_id}/documents", response_model=list[BidDocumentCard])
-def list_project_documents(
-    # List all documents uploaded to a project.
-    # Returns document cards with name, parse status, and creation time.
+@router.get("", response_model=list[ProjectDocumentResponse])
+async def list_project_documents(
     project_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    service: DocumentService = Depends(get_document_service),
-) -> list[BidDocumentCard]:
-    # 必须经服务层回查项目成员资格；不能因为列表查询而绕过授权。
-    documents = service.list_project_documents(
-        project_id, current_user.id, current_user.role_codes
-    )
-    return [
-        BidDocumentCard(
-            doc_id=document.id,
-            doc_name=(
-                document.versions[0].file_name
-                if document.versions
-                else document.logical_name
-            ),
-            parse_status=(
-                document.versions[0].parse_status if document.versions else "UPLOADED"
-            ),
-            created_at=(
-                document.versions[0].created_at.isoformat()
-                if document.versions
-                else None
-            ),
-        )
-        for document in documents
-    ]
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+) -> list[ProjectDocumentResponse]:
+    """查询当前用户有权访问的项目文件。"""
+    return await DocumentService(session, settings).list_project_documents(project_id, current_user)
 
 
-@router.post(
-    "/projects/{project_id}/documents",
-    response_model=DocumentTaskResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def upload_project_document(
-    # Upload a tender document (PDF/DOCX) to a project.
-    # Triggers async parsing and chunking; returns task ID for status polling.
+@router.post("", response_model=ProjectDocumentResponse, status_code=status.HTTP_201_CREATED)
+async def upload_project_document(
     project_id: UUID,
-    document_type: Annotated[str, Form()],
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+    logical_name: Annotated[str, Form(min_length=1, max_length=512)],
     file: Annotated[UploadFile, File()],
-    current_user: CurrentUser = Depends(get_current_user),
-    settings: Settings = Depends(get_settings),
-    service: DocumentService = Depends(get_document_service),
-) -> DocumentTaskResponse:
-    return service.upload_tender_document(
+) -> ProjectDocumentResponse:
+    """上传项目源文件；解析需在后续 Worker 接入后显式触发。"""
+    document_service = DocumentService(session, settings)
+    return await document_service.upload(project_id, current_user, logical_name, file)
+
+
+@router.get("/{document_id}", response_model=ProjectDocumentResponse)
+async def get_project_document(
+    project_id: UUID,
+    document_id: UUID,
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+) -> ProjectDocumentResponse:
+    """读取单个项目文档及其当前版本。"""
+    return await DocumentService(session, settings).get_project_document(
+        project_id, document_id, current_user
+    )
+
+
+@router.post("/{document_id}/parse", response_model=DocumentParseJobResponse)
+async def request_document_parse(
+    project_id: UUID,
+    document_id: UUID,
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+) -> DocumentParseJobResponse:
+    """显式提交解析任务；Worker 只接收任务 ID 并回查数据库。"""
+    return await DocumentService(session, settings).request_parse(
         project_id,
-        current_user.id,
-        current_user.role_codes,
-        document_type,
-        file,
-        settings.max_upload_bytes,
+        document_id,
+        current_user,
     )
 
 
-@router.get("/documents/{document_id}", response_model=DocumentResponse)
-def get_document(
-    # Get document metadata and current version info.
+@router.get("/{document_id}/nodes", response_model=DocumentNodePage)
+async def list_document_nodes(
+    project_id: UUID,
     document_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    service: DocumentService = Depends(get_document_service),
-) -> DocumentResponse:
-    return service.get_document(document_id, current_user.id, current_user.role_codes)
-
-
-@router.get("/documents/{document_id}/versions", response_model=list[DocumentVersionResponse])
-def list_document_versions(
-    # List all versions of a document.
-    document_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    service: DocumentService = Depends(get_document_service),
-) -> list[DocumentVersionResponse]:
-    return service.list_versions(document_id, current_user.id, current_user.role_codes)
-
-
-@router.get("/documents/{document_id}/nodes", response_model=DocumentNodePage)
-def list_document_nodes(
-    # Paginated access to document chunks (nodes).
-    # Nodes are ordered by position; version_no filters by document version.
-    document_id: UUID,
-    version_no: int | None = Query(default=None, ge=1),
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
     offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=100, ge=1, le=200),
-    current_user: CurrentUser = Depends(get_current_user),
-    service: DocumentService = Depends(get_document_service),
-) -> DocumentNodePage:
-    return service.list_nodes(
-        document_id, version_no, offset, limit, current_user.id, current_user.role_codes
-    )
-
-
-@router.get("/documents/{document_id}/clauses", response_model=list[TenderClauseResponse])
-def list_document_clauses(
-    # List extracted tender clauses from a document.
-    document_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    service: DocumentService = Depends(get_document_service),
-) -> list[TenderClauseResponse]:
-    return service.list_clauses(document_id, current_user.id, current_user.role_codes)
-
-
-@router.post(
-    "/documents/{document_id}/retry",
-    response_model=DocumentTaskResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def retry_document(
-    # Re-submit a failed document parsing task.
-    document_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    service: DocumentService = Depends(get_document_service),
-) -> DocumentTaskResponse:
-    return service.retry_document(document_id, current_user.id, current_user.role_codes)
-
-
-@router.post(
-    "/documents/{document_id}/reprocess",
-    response_model=DocumentTaskResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def reprocess_document(
-    # Re-run parsing on a successfully parsed document with current rules.
-    document_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    service: DocumentService = Depends(get_document_service),
-) -> DocumentTaskResponse:
-    return service.reprocess_document(document_id, current_user.id, current_user.role_codes)
-
-
-@router.get("/documents/{document_id}/download")
-def download_document(
-    # Download original document file (or specific version).
-    document_id: UUID,
+    limit: int = Query(default=50, ge=1, le=200),
     version_no: int | None = Query(default=None, ge=1),
-    current_user: CurrentUser = Depends(get_current_user),
-    service: DocumentService = Depends(get_document_service),
-) -> StreamingResponse:
-    download = service.create_authorized_download(
-        document_id, version_no, current_user.id, current_user.role_codes
+) -> DocumentNodePage:
+    return await DocumentService(session, settings).list_nodes(
+        project_id, document_id, current_user, offset, limit, version_no
     )
+
+
+@router.get("/{document_id}/tags")
+async def list_document_tags(
+    project_id: UUID,
+    document_id: UUID,
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+) -> list[dict[str, object]]:
+    """查看 bid_pipeline 的条款/字段提取事实，供人工定位和复核。"""
+    del settings
+    return await DocumentTagService(session).list(project_id, document_id, current_user)
+
+
+@router.get("/{document_id}/parse-jobs/{job_id}", response_model=DocumentParseJobResponse)
+async def get_document_parse_job(
+    project_id: UUID,
+    document_id: UUID,
+    job_id: UUID,
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+) -> DocumentParseJobResponse:
+    """查询指定文档的解析任务状态。"""
+    return await DocumentService(session, settings).get_parse_job(
+        project_id, document_id, job_id, current_user
+    )
+
+
+@router.get("/{document_id}/versions", response_model=list[DocumentVersionResponse])
+async def list_document_versions(
+    project_id: UUID,
+    document_id: UUID,
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+) -> list[DocumentVersionResponse]:
+    """查询逻辑文档的版本历史，不返回对象键。"""
+    return await DocumentService(session, settings).list_document_versions(
+        project_id, document_id, current_user
+    )
+
+
+@router.post(
+    "/{document_id}/versions",
+    response_model=DocumentVersionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_document_version(
+    project_id: UUID,
+    document_id: UUID,
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+    file: Annotated[UploadFile, File()],
+) -> DocumentVersionResponse:
+    """上传新版本，解析成功前当前有效版本保持不变。"""
+    return await DocumentService(session, settings).upload_new_version(
+        project_id, document_id, current_user, file
+    )
+
+
+@router.post("/{document_id}/versions/{version_id}/parse", response_model=DocumentParseJobResponse)
+async def request_document_version_parse(
+    project_id: UUID,
+    document_id: UUID,
+    version_id: UUID,
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+) -> DocumentParseJobResponse:
+    """显式解析指定版本；同一逻辑文档同一时刻只允许一个版本解析。"""
+    return await DocumentService(session, settings).request_parse(
+        project_id, document_id, current_user, version_id
+    )
+
+
+@router.get("/{document_id}/download")
+async def download_project_document(
+    project_id: UUID,
+    document_id: UUID,
+    current_user: CurrentUser,
+    session: DatabaseSession,
+    settings: ApplicationSettings,
+) -> StreamingResponse:
+    """仅在项目成员授权通过后代理流式下载，不暴露对象键或长期外链。"""
+    download = await DocumentService(session, settings).create_authorized_download(
+        project_id, document_id, current_user
+    )
+    safe_name = quote(download.file_name, safe="")
     return StreamingResponse(
         download.stream,
         media_type=download.mime_type,
-        headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(download.file_name)}"
-        },
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{safe_name}"},
     )
-
-
-@router.get("/tasks/{task_id}", response_model=TaskResponse)
-def get_task(
-    # Poll async task status (parse, index, etc.).
-    task_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    service: DocumentService = Depends(get_document_service),
-) -> TaskResponse:
-    return service.get_task(task_id, current_user.id, current_user.role_codes)
