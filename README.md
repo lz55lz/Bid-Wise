@@ -117,3 +117,7 @@ npm run build
 - [使用手册](doc/user-manual.md)
 
 PostgreSQL、Redis、MinIO、MinerU 及模型服务由部署环境提供。向量数据使用 PostgreSQL 的 `pgvector` 扩展，不需要部署独立向量数据库。首次创建管理员可执行 `uv run python -m app.cli.bootstrap_admin`，该命令交互式读取密码，不会写入命令历史。
+
+## 项目说明
+
+- [面试讲解稿](doc/interview-guide.md)：项目背景、架构取舍、核心链路、典型问题与面试问答。
