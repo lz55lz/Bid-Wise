@@ -1,13 +1,23 @@
 # BidWise
 
-面向单企业私有部署的招投标智能分析与投标决策平台。它将招标文件解析、需求复核、企业材料匹配、风险研判、报告生成与基于证据的智能问答串成一条可追溯的投标准备流程。
+> 面向企业私有部署的招投标智能分析与投标决策平台。
+
+BidWise 将招标文件解析、人工需求复核、企业材料匹配、风险研判、决策建议、报告生成与项目问答连接为一条可追溯的投标准备流程。系统的核心不是“总结招标文件”，而是基于**已绑定企业**及其资质、业绩、人员、财务与信用材料，回答“这个企业是否适合投、还缺什么、风险在哪里”。
+
+## 适用场景
+
+- 企业收到招标文件后，快速整理资格、评分、商务及技术要求。
+- 投标负责人核对企业已有材料与招标要求，识别决定性缺口。
+- 团队在提交前统一查看风险、投标建议和企业适配度结论。
+- 在同一项目内持续追问，获得带原文依据或企业材料依据的回答。
 
 ## 核心能力
 
 - **文件解析与结构化**：支持招标文件上传、异步解析和章节化浏览；复杂 PDF 可接入 MinerU，DOCX 提供本地解析兜底。
 - **需求复核**：自动提取资格、评分、商务和技术类要求，人工确认高价值或不确定事项后再进入后续分析。
 - **企业匹配与风险研判**：以项目 ID 和企业 ID 关联数据，匹配企业材料并识别缺失项、风险等级与投标建议。
-- **报告与知识问答**：生成可下载报告；问答基于项目原文证据返回答案和引用，支持 Markdown 渲染与会话历史。
+- **企业适配度分析**：围绕绑定企业输出适配结论、优势、决定性缺口、风险与推进条件，而非只罗列招标要求。
+- **报告与项目问答**：报告汇总企业适配度、匹配、风险与决策；问答基于项目原文与企业材料返回答案和引用，支持连续追问与会话历史。
 - **运行可观测性**：系统设置提供后端依赖健康检查，展示 PostgreSQL、Redis、MinIO、Milvus、MinerU 与模型服务可用状态。
 
 ## 技术亮点
@@ -17,17 +27,85 @@
 - 所有项目、文档、证据和报告均由服务端按身份、角色、成员资格和资源归属进行授权校验。
 - 前端使用 Vue 3、TypeScript、Vite 与 Element Plus，覆盖项目管理、文档浏览、需求复核、报告和智能问答等完整演示路径。
 
-## 快速演示流程
+## 业务流程
 
-1. 创建项目并关联企业资料。
+```text
+创建项目并绑定企业
+        ↓
+上传招标文件 → 字段提取 → 人工直接审批 / 修改补充后审批
+        ↓
+匹配分析 → 风险研判 → 决策建议 → 企业适配度报告
+        ↓
+项目问答与多轮追问
+```
+
+1. 创建项目并绑定待评估的企业资料。
 2. 上传招标文件，等待解析完成后查看结构化内容。
-3. 在“需求复核”确认关键要求。
-4. 执行匹配分析，查看风险、材料缺口与投标建议。
-5. 生成报告，或在项目问答中围绕原文继续追问。
+3. 在“需求复核”中直接审批，或修改、补充后再审批关键要求。
+4. 启动分析，查看企业匹配、风险、决策建议和材料缺口。
+5. 查看报告中的企业适配度结论；也可在项目问答中围绕当前项目继续追问。
 
-## 截图与敏感信息
+## 仓库结构
 
-仓库不包含 `.env`、运行日志、真实上传文件、个人简历、测试截图或演示交付物。请复制 `.env.example` 为 `.env` 后自行填写部署环境配置，切勿提交密钥和生产数据。
+```text
+Bid-Wise/
+├── backend/                 # FastAPI API、领域模块、ARQ Worker、迁移与测试
+├── frontend/                # Vue 3 管理端
+├── deploy/                  # 部署与运维脚本
+├── doc/                     # 产品、架构、数据库与使用文档
+├── .env.example             # 环境变量模板（不含真实值）
+└── docker-compose.yml       # 本地向量服务依赖
+```
+
+## 本地启动
+
+### 1. 配置环境变量
+
+复制根目录 `.env.example` 为 `.env`，按实际部署环境填写数据库、对象存储、模型与解析服务地址。`.env` 已被 Git 忽略，切勿提交密钥或生产数据。
+
+### 2. 启动后端与 Worker
+
+后端使用 Python 3.12 和 `uv`：
+
+```powershell
+cd backend
+uv sync --all-groups
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload
+```
+
+另开一个终端启动异步任务 Worker：
+
+```powershell
+cd backend
+uv run python start_worker.py
+```
+
+### 3. 启动前端
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+默认开发地址通常为：前端 `http://localhost:3000`、后端 `http://localhost:8000`。具体环境依赖、启动与停服说明见[本机部署与运行手册](doc/deployment-local.md)。
+
+## 质量检查
+
+```powershell
+cd backend
+uv run pytest
+uv run ruff check app tests
+
+cd ..\frontend
+npm run type-check
+npm run build
+```
+
+## 数据与提交卫生
+
+仓库不包含 `.env`、运行日志、真实上传文件、个人简历、测试截图、浏览器自动化产物、模型中间输出或演示交付物。`.gitignore` 已覆盖这些本地产物；提交前仍建议运行 `git status`，确认只包含源码、文档与必要配置。
 
 ## 文档基线
 
@@ -39,30 +117,4 @@
 - [本机部署与运行手册](doc/deployment-local.md)
 - [使用手册](doc/user-manual.md)
 
-## 已初始化的结构
-
-- `backend/`：应用、领域服务、持久化、Worker、集成、规则、报告、迁移和测试目录。
-- `frontend/`：Vue 页面、组件、路由、状态管理和 typed API client 目录。
-- `.env.example`：仅包含文档允许的 AI 服务连接键；模型标识固定在服务端代码，不属于环境配置。
-
-## 后端本地开发
-
-后端使用 `uv` 管理 Python 3.12：
-
-```powershell
-cd backend
-uv sync --all-groups
-uv run pytest
-uv run ruff check app tests
-```
-
-PostgreSQL、Redis、MinIO、MinerU 和模型服务由部署或本机环境提供，不由本仓库的 Compose 管理。`deploy/start-local.ps1` 仅启动本仓库管理的 etcd、Milvus、数据库迁移、API 和 ARQ Worker；Vue 前端请在 `frontend/` 中独立启动。运行后端前，在根目录 `.env` 中配置 `DATABASE_URL`、`REDIS_URL`、`JWT_SECRET_KEY`、`MINIO_ENDPOINT`、`MINIO_ACCESS_KEY` 与 `MINIO_SECRET_KEY`，以及 AI 服务连接键。
-
-完成迁移后，使用 `uv run python -m app.scripts.bootstrap_admin` 交互式创建首位系统管理员。该命令不会将密码写入命令历史。
-
-## 本机运行
-
-当前验收基线中，后端 API 和 ARQ Worker 在 Windows 主机直接启动；Docker
-只管理 etcd、Milvus 与 ClamAV。PostgreSQL、Redis、MinIO、MinerU 和模型服务
-均使用已有的受控端点；Vue 前端由开发者独立启动。完整配置、启动、重启、验证与停止步骤见
-[本机部署与运行手册](doc/deployment-local.md)。
+PostgreSQL、Redis、MinIO、MinerU 及模型服务由部署环境提供；根目录 Compose 仅管理本地向量服务依赖。首次创建管理员可执行 `uv run python -m app.cli.bootstrap_admin`，该命令交互式读取密码，不会写入命令历史。

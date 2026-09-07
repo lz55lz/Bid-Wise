@@ -29,6 +29,12 @@ frontend/dist/
 # Local tooling and OS files
 .idea/
 .vscode/
+.claude/
+.codex/
+.cursor/
+.agents/
+CLAUDE.md
+AGENTS.md
 .DS_Store
 Thumbs.db
 
@@ -46,9 +52,21 @@ deploy/logs/
 *.log
 *.out.log
 *.err.log
+.history/
+.cache/
+.pytest_tmp/
+.benchmarks/
 .token
 .llm_*
 tmp_*
+*_generated.*
+*_generation.*
+*_ai_output.*
+*_ai_result.*
+*_agent_trace.*
+*_conversation_export.*
+*_screenshot.*
+*_capture.*
 *_TEST_RESULT.txt
 *_TEST_REPORT.md
 # Deliverables may contain personal or customer-facing material.
@@ -100,3 +118,4 @@ deliverables/
 /tmp_resume_text.txt
 /test_all_docs.py
 /test_rag_flow.py
+/backend/TEST_RECORD.md
