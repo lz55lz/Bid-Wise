@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from app.api.deps import ApplicationSettings, CurrentUser, DatabaseSession
 from app.core.errors import DomainError
@@ -163,6 +163,17 @@ async def delete_set(set_id: UUID, current_user: CurrentUser, session: DatabaseS
     item = await session.get(EvaluationSet, set_id, with_for_update=True)
     if item is None:
         raise DomainError("RESOURCE_NOT_FOUND", "评测集不存在", 404)
+    active_run = await session.scalar(
+        select(EvaluationRun.id)
+        .where(EvaluationRun.set_id == item.id, EvaluationRun.status.in_(("QUEUED", "RUNNING")))
+        .limit(1)
+    )
+    if active_run is not None:
+        raise DomainError("EVALUATION_SET_IN_USE", "评测集仍有运行中的任务，暂不能删除", 409)
+    # 保留历史评测运行；EvaluationRun.set_id 可为空，先解除关联再删除题集。
+    await session.execute(
+        update(EvaluationRun).where(EvaluationRun.set_id == item.id).values(set_id=None)
+    )
     await session.delete(item)
     await session.commit()
 
